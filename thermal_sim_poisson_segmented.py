@@ -83,6 +83,7 @@ SCENARIO_GLIDER_WEIGHT_KG = 400  # Glider weight for polar lookup: 400 or 600 kg
 # SCENARIO_MC_SNIFF is now dynamically determined based on altitude bands
 SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.5  # Average number of thermals per square kilometer (Poisson lambda)
 SCENARIO_LAMBDA_STRENGTH = 3.0  # Mean strength of thermals (Poisson lambda, clamped 1-10 m/s)
+SCENARIO_MC_SNIFF_TOP_MANUAL = 3.0  # NEW: Manually adjustable MC_Sniff for the top band
 
 
 # --- Helper function for calculating sniffing radius ---
@@ -293,65 +294,52 @@ def generate_poisson_updraft_thermals(sim_area_side_meters, lambda_thermals_per_
     return updraft_thermals
 
 
-def get_mc_sniff_for_altitude(current_altitude, z_cbl, lambda_strength, altitude_step_meters, number_of_bands):
+def get_mc_sniff_for_altitude(current_altitude, z_cbl, manual_mc_sniff_top, altitude_step_meters, number_of_bands):
     """
-    Determines the MC_Sniff setting based on the current altitude band.
+    Determines the MC_Sniff setting based on the current altitude band,
+    using a manually set top MC_Sniff and interpolating down to 1.0 m/s at 1500m.
 
     Args:
         current_altitude (float): The current altitude of the glider in meters.
         z_cbl (float): Convective Boundary Layer (CBL) height in meters.
-        lambda_strength (float): Mean strength of thermals (Poisson lambda).
-        altitude_step_meters (float): The calculated altitude step for each band.
-        number_of_bands (int): The number of height bands.
+        manual_mc_sniff_top (float): The manually set MC_Sniff value for the top band.
+        altitude_step_meters (float): The calculated altitude step for each band (not directly used for interpolation, but for context).
+        number_of_bands (int): The number of height bands (not directly used for interpolation, but for context).
 
     Returns:
         float: The MC_Sniff setting for the current altitude.
     """
-    # Define MC_Sniff values for the bands
-    mc_sniff_top = max(0.0, lambda_strength - 0.5)  # Ensure it's not negative
-    mc_sniff_lowest_band_above_1500 = 1.0
-    mc_sniff_middle = (mc_sniff_top + mc_sniff_lowest_band_above_1500) / 2
-
-    # Altitude ranges for the bands (from CBL down to 1500m)
-    # Band 1 (Top): (z_cbl - altitude_step_meters, z_cbl]
-    # Band 2 (Middle): (z_cbl - 2*altitude_step_meters, z_cbl - altitude_step_meters]
-    # Band 3 (Lowest): [1500, z_cbl - 2*altitude_step_meters]
-
     # Handle altitudes below 1500m
     if current_altitude <= 1500:
         return 0.0  # Glider focuses on staying airborne
 
-    # Calculate band boundaries (descending)
-    band_boundaries = [z_cbl]
-    for i in range(1, number_of_bands + 1):
-        boundary = z_cbl - i * altitude_step_meters
-        # Ensure the lowest boundary doesn't go below 1500 if CBL is very low
-        band_boundaries.append(max(1500.0, boundary))
+    # Define the MC_Sniff values at the top (CBL) and bottom (1500m) of the relevant altitude range
+    mc_sniff_at_cbl = manual_mc_sniff_top
+    mc_sniff_at_1500m = 1.0  # Fixed lower threshold for sniffing
 
-    # Sort in descending order to easily check bands from top down
-    band_boundaries.sort(reverse=True)  # Ensure descending order
+    # Ensure there's a valid range for interpolation
+    if z_cbl - 1500 < EPSILON:  # If CBL is at or near 1500m
+        return mc_sniff_at_cbl  # Return the top value if there's no range to interpolate
 
-    # Determine which band the current altitude falls into
-    # Check top band
-    if current_altitude > band_boundaries[
-        1]:  # current_altitude is between band_boundaries[0] (CBL) and band_boundaries[1]
-        return mc_sniff_top
+    # Define altitude points and corresponding MC_Sniff values for linear interpolation
+    alt_points = np.array([1500.0, z_cbl])  # Order from low to high altitude
+    mc_sniff_values = np.array([mc_sniff_at_1500m, mc_sniff_at_cbl])  # Corresponding MC_Sniff values
 
-    # Check middle band (if applicable)
-    if number_of_bands >= 2 and current_altitude > band_boundaries[
-        2]:  # current_altitude is between band_boundaries[1] and band_boundaries[2]
-        return mc_sniff_middle
+    # Create an interpolation function
+    # bounds_error=False allows extrapolation, fill_value="extrapolate" handles values outside the range
+    interp_mc_sniff = interp1d(alt_points, mc_sniff_values, kind='linear', fill_value="extrapolate", bounds_error=False)
 
-    # Check lowest band (above 1500m, if applicable)
-    if number_of_bands >= 3 and current_altitude >= 1500:  # current_altitude is between band_boundaries[2] and 1500
-        return mc_sniff_lowest_band_above_1500
+    # Get the interpolated value
+    sniff_value = interp_mc_sniff(current_altitude).item()
 
-    # Fallback, should not be reached if logic is correct and current_altitude > 1500
-    return 0.0
+    # Clip the value to ensure it's non-negative and doesn't exceed the manually set top value
+    sniff_value = max(0.0, min(manual_mc_sniff_top, sniff_value))
+
+    return sniff_value
 
 
 def draw_poisson_thermals_and_glide_path_with_intercept_check(
-        z_cbl_meters, glider_weight_kg, lambda_thermals_per_sq_km, lambda_strength,
+        z_cbl_meters, glider_weight_kg, lambda_thermals_per_sq_km, lambda_strength, manual_mc_sniff_top,
         fig_width=12, fig_height=12
 ):
     """
@@ -422,23 +410,24 @@ def draw_poisson_thermals_and_glide_path_with_intercept_check(
     flight_log_data.append({
         'Altitude (m)': round(current_altitude),
         'Airspeed (knots)': round(get_airspeed_for_macready(
-            get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, lambda_strength, ALTITUDE_STEP_METERS,
+            get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, manual_mc_sniff_top, ALTITUDE_STEP_METERS,
                                       NUMBER_OF_HEIGHT_BANDS),
-            get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, lambda_strength, ALTITUDE_STEP_METERS,
+            get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, manual_mc_sniff_top, ALTITUDE_STEP_METERS,
                                       NUMBER_OF_HEIGHT_BANDS), glider_weight_kg) * MS_TO_KNOT),
         'Sink Rate (m/s)': round(get_sink_rate_from_polar(get_airspeed_for_macready(
-            get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, lambda_strength, ALTITUDE_STEP_METERS,
+            get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, manual_mc_sniff_top, ALTITUDE_STEP_METERS,
                                       NUMBER_OF_HEIGHT_BANDS),
-            get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, lambda_strength, ALTITUDE_STEP_METERS,
+            get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, manual_mc_sniff_top, ALTITUDE_STEP_METERS,
                                       NUMBER_OF_HEIGHT_BANDS), glider_weight_kg), glider_weight_kg), 2),
         'Distance Flown (km)': round(total_horizontal_distance_covered / 1000, 3)
     })
 
     # Initial MC_Sniff for sniffing radius calculation (will be updated in loop)
-    initial_mc_sniff = get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, lambda_strength, ALTITUDE_STEP_METERS,
-                                                 NUMBER_OF_HEIGHT_BANDS)
+    initial_mc_sniff_for_radius = get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, manual_mc_sniff_top,
+                                                            ALTITUDE_STEP_METERS,
+                                                            NUMBER_OF_HEIGHT_BANDS)
     sniffing_radius_meters = calculate_sniffing_radius(
-        lambda_strength, initial_mc_sniff  # Use lambda_strength as proxy for ambient Wt
+        lambda_strength, initial_mc_sniff_for_radius  # Use lambda_strength as proxy for ambient Wt
     )
     if sniffing_radius_meters <= 0:
         print("Warning: Calculated Macready sniffing radius is non-positive. Setting to 1m for visualization.")
@@ -466,7 +455,7 @@ def draw_poisson_thermals_and_glide_path_with_intercept_check(
     green_downdraft_encounter_distances_meters = []
 
     while current_altitude > 500 and total_horizontal_distance_covered < MAX_SEARCH_DISTANCE_METERS:
-        mc_sniff_at_current_alt = get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, lambda_strength,
+        mc_sniff_at_current_alt = get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, manual_mc_sniff_top,
                                                             ALTITUDE_STEP_METERS, NUMBER_OF_HEIGHT_BANDS)
         airspeed_for_macready = get_airspeed_for_macready(mc_sniff_at_current_alt, mc_sniff_at_current_alt,
                                                           glider_weight_kg)
@@ -704,7 +693,7 @@ def draw_poisson_thermals_and_glide_path_with_intercept_check(
         f"Z={z_cbl_meters}m, Glider Weight={glider_weight_kg}kg\n"
         f"Search Limit: {MAX_SEARCH_DISTANCE_METERS / 1000:.0f}km, Actual Glide Distance: {total_horizontal_distance_covered / 1000:.1f}km\n"
         f"Altitude Step (Band): {ALTITUDE_STEP_METERS}m, Bands: {NUMBER_OF_HEIGHT_BANDS}\n"
-        f"Pilot MC Sniff (Dynamic)\n"
+        f"Pilot MC Sniff (Manual Top): {manual_mc_sniff_top:.1f} m/s (Dynamic)\n"  # Updated footer text
         f"Thermal Density: {lambda_thermals_per_sq_km}/km², Avg Strength: {lambda_strength} (1-10m/s)\n"
         f"Sniffing Radius (at avg Wt): {sniffing_radius_meters:.0f}m\n"
         f"Non-Climb Updraft Intercept Distances: {red_dist_str}\n"
@@ -775,7 +764,7 @@ def draw_poisson_thermals_and_glide_path_with_intercept_check(
 
 
 def simulate_intercept_experiment_poisson(
-        z_cbl_meters, glider_weight_kg, lambda_thermals_per_sq_km, lambda_strength
+        z_cbl_meters, glider_weight_kg, lambda_thermals_per_sq_km, lambda_strength, manual_mc_sniff_top
 ):
     """
     Performs a single Monte Carlo experiment with Poisson-distributed updraft thermals
@@ -789,6 +778,7 @@ def simulate_intercept_experiment_poisson(
         glider_weight_kg (int): The weight of the glider (400 or 600 kg).
         lambda_thermals_per_sq_km (float): The average number of thermals per square kilometer.
         lambda_strength (float): The mean (lambda) for the Poisson distribution of thermal strength magnitude.
+        manual_mc_sniff_top (float): The manually set MC_Sniff value for the top band.
 
     Returns:
         float: The horizontal distance covered before the *first* successful climb, or float('inf') if no such climb.
@@ -812,10 +802,10 @@ def simulate_intercept_experiment_poisson(
         return float('inf')
 
     # Initial MC_Sniff for sniffing radius calculation (will be updated in loop)
-    initial_mc_sniff = get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, lambda_strength,
-                                                 calculated_altitude_step_meters, NUMBER_OF_HEIGHT_BANDS)
+    initial_mc_sniff_for_radius = get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, manual_mc_sniff_top,
+                                                            calculated_altitude_step_meters, NUMBER_OF_HEIGHT_BANDS)
     sniffing_radius_meters = calculate_sniffing_radius(
-        lambda_strength, initial_mc_sniff
+        lambda_strength, initial_mc_sniff_for_radius
     )
     if sniffing_radius_meters <= 0:
         return float('inf')  # No intercept possible if sniffing radius is non-positive
@@ -837,7 +827,7 @@ def simulate_intercept_experiment_poisson(
     trial_line_angle_radians = random.uniform(0, 2 * math.pi)
 
     while current_altitude > 500 and total_horizontal_distance_covered < MAX_SEARCH_DISTANCE_METERS:
-        mc_sniff_at_current_alt = get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, lambda_strength,
+        mc_sniff_at_current_alt = get_mc_sniff_for_altitude(current_altitude, z_cbl_meters, manual_mc_sniff_top,
                                                             calculated_altitude_step_meters, NUMBER_OF_HEIGHT_BANDS)
         airspeed_for_macready = get_airspeed_for_macready(mc_sniff_at_current_alt, mc_sniff_at_current_alt,
                                                           glider_weight_kg)
@@ -954,7 +944,8 @@ if __name__ == '__main__':
             z_cbl_meters=SCENARIO_Z_CBL,
             glider_weight_kg=SCENARIO_GLIDER_WEIGHT_KG,
             lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
-            lambda_strength=SCENARIO_LAMBDA_STRENGTH
+            lambda_strength=SCENARIO_LAMBDA_STRENGTH,
+            manual_mc_sniff_top=SCENARIO_MC_SNIFF_TOP_MANUAL  # Pass the new parameter
         )
 
     elif choice == '2':
@@ -967,17 +958,17 @@ if __name__ == '__main__':
         print(f"  Glider Weight: {SCENARIO_GLIDER_WEIGHT_KG} kg")
         print(f"  Thermal Density (Lambda): {SCENARIO_LAMBDA_THERMALS_PER_SQ_KM} thermals/km²")
         print(f"  Thermal Strength Mean (Lambda): {SCENARIO_LAMBDA_STRENGTH} m/s (clamped 1-10 m/s)")
+        print(f"  Manual MC Sniff (Top Band): {SCENARIO_MC_SNIFF_TOP_MANUAL} m/s")  # New print for manual setting
         print("-" * 50)
 
         intercept_count = 0
         intercept_distances = []  # Collect distances for successful intercepts
 
         # Calculate dynamic ALTITUDE_STEP_METERS for Monte Carlo
-        if SCENARIO_Z_CBL <= 1500:  # Corrected: use SCENARIO_Z_CBL here
+        if SCENARIO_Z_CBL <= 1500:
             mc_altitude_step_meters = 0
         else:
-            mc_altitude_step_meters = round((SCENARIO_Z_CBL - 1500) / NUMBER_OF_HEIGHT_BANDS,
-                                            -2)  # Corrected: use SCENARIO_Z_CBL here
+            mc_altitude_step_meters = round((SCENARIO_Z_CBL - 1500) / NUMBER_OF_HEIGHT_BANDS, -2)
             if mc_altitude_step_meters <= 0:
                 mc_altitude_step_meters = 100.0
 
@@ -987,7 +978,8 @@ if __name__ == '__main__':
                 z_cbl_meters=SCENARIO_Z_CBL,
                 glider_weight_kg=SCENARIO_GLIDER_WEIGHT_KG,
                 lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
-                lambda_strength=SCENARIO_LAMBDA_STRENGTH
+                lambda_strength=SCENARIO_LAMBDA_STRENGTH,
+                manual_mc_sniff_top=SCENARIO_MC_SNIFF_TOP_MANUAL  # Pass the new parameter
             )
             if distance_at_intercept != float('inf'):
                 intercept_count += 1
@@ -1000,7 +992,9 @@ if __name__ == '__main__':
             average_intercept_distance = np.mean(intercept_distances)
 
         # Calculate the sniffing radius for display in results (using top band MC_Sniff as representative)
-        representative_mc_sniff = get_mc_sniff_for_altitude(SCENARIO_Z_CBL, SCENARIO_Z_CBL, SCENARIO_LAMBDA_STRENGTH,
+        representative_mc_sniff = get_mc_sniff_for_altitude(SCENARIO_Z_CBL, SCENARIO_Z_CBL,
+                                                            SCENARIO_MC_SNIFF_TOP_MANUAL,
+                                                            # Use manual_mc_sniff_top here
                                                             mc_altitude_step_meters, NUMBER_OF_HEIGHT_BANDS)
         calculated_sniffing_radius = calculate_sniffing_radius(
             SCENARIO_LAMBDA_STRENGTH, representative_mc_sniff
