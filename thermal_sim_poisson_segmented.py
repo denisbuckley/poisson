@@ -973,10 +973,11 @@ if __name__ == '__main__':
         intercept_distances = []  # Collect distances for successful intercepts
 
         # Calculate dynamic ALTITUDE_STEP_METERS for Monte Carlo
-        if SCENARIO_Z_CBL <= 1500:
+        if SCENARIO_Z_CBL <= 1500:  # Corrected: use SCENARIO_Z_CBL here
             mc_altitude_step_meters = 0
         else:
-            mc_altitude_step_meters = round((z_cbl_meters - 1500) / NUMBER_OF_HEIGHT_BANDS, -2)
+            mc_altitude_step_meters = round((SCENARIO_Z_CBL - 1500) / NUMBER_OF_HEIGHT_BANDS,
+                                            -2)  # Corrected: use SCENARIO_Z_CBL here
             if mc_altitude_step_meters <= 0:
                 mc_altitude_step_meters = 100.0
 
