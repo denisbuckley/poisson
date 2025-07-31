@@ -17,5 +17,5 @@ SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.5,
 SCENARIO_LAMBDA_STRENGTH = 3.0, 
 SCENARIO_MC_SNIFF_TOP_MANUAL = 3.0 (sets diameter of updraft interception, smaller number increases chances of interception), 
 NUMBER_OF_HEIGHT_BANDS = 3 (script adjusts Macready setting/speed as glider descends with no intercept),
-The script stops/climbs to CBL when intercept and resets the glidepath
+The script stops/climbs to CBL when intercept and resets the glidepath.
 Each iteration generates a fresh glidepath and thermal grid
