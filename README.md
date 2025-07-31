@@ -6,7 +6,8 @@ The effective updraft diameter is according to Speight (2015:40) y=0.033 (x/100)
 As Speight's formula is in knots/feet, for m/s the formula is y = 5.9952 * 10^-7 * 10^3
 If this calc decrements up strength to zero, that is the horizontal extent of the updraft.
 
-thermal_sim_poisson_segmented.py has 2 run options:
+thermal_sim_poisson_segmented.py 
+has 2 run options:
 1. Generate a single plot (visualize Poisson-distributed thermals with encircling downdrafts and flight log)
 2. Run Monte Carlo simulation (compute probability for a single scenario and export CSV)
 
@@ -21,4 +22,5 @@ NUMBER_OF_HEIGHT_BANDS = 3 (script adjusts Macready setting/speed as glider desc
 The script stops/climbs to CBL when intercept and resets the glidepath.
 Each iteration generates a fresh glidepath and thermal grid
 
-therm_annular_intercept.py contains values that match Cochrane's (1999) 10% probability of intercepting a thermal per mile.
+therm_annular_intercept.py 
+contains values that match Cochrane's (1999) 10% probability of intercepting a thermal per mile.
