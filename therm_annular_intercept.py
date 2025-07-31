@@ -47,9 +47,9 @@ MAX_SEARCH_DISTANCE_METERS = 1620.0  # 10 kilometers
 # These parameters define the single simulation scenario.
 SCENARIO_Z_CBL = 2500.0  # Convective Boundary Layer (CBL) height in meters
 SCENARIO_GLIDE_RATIO = 40  # Glider's glide ratio (e.g., 40:1)
-SCENARIO_MC_SNIFF = 4  # Pilot's Macready setting for sniffing in m/s
+SCENARIO_MC_SNIFF = 2  # Pilot's Macready setting for sniffing in m/s
 SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.2  # Average number of thermals per square kilometer (Poisson lambda)
-SCENARIO_LAMBDA_STRENGTH = 6  # Mean strength of thermals (Poisson lambda, clamped 1-10 m/s)
+SCENARIO_LAMBDA_STRENGTH = 3  # Mean strength of thermals (Poisson lambda, clamped 1-10 m/s)
 
 
 # --- Helper function for calculating sniffing radius ---
