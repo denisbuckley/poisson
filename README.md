@@ -20,3 +20,5 @@ SCENARIO_MC_SNIFF_TOP_MANUAL = 3.0 (sets diameter of updraft interception, small
 NUMBER_OF_HEIGHT_BANDS = 3 (script adjusts Macready setting/speed as glider descends with no intercept),
 The script stops/climbs to CBL when intercept and resets the glidepath.
 Each iteration generates a fresh glidepath and thermal grid
+
+therm_annular_intercept.py contains values that match Cochrane's (1999) 10% probability of intercepting a thermal per mile.
