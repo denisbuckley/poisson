@@ -24,3 +24,4 @@ Each iteration generates a fresh glidepath and thermal grid
 
 therm_annular_intercept.py 
 contains values that match Cochrane's (1999) 10% probability of intercepting a thermal per mile.
+Lamda of 8.0 derives from W0 = Wx + (5.9952 * 10^-7) * x^3, where W0 is thermal strength at zero metres from centre, Wx is strength at x metres (see above); assuming circling radius of 150m, then for Wx=4, W0 = 6ms; thus Lambda=6 and MC=4
