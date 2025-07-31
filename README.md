@@ -8,6 +8,7 @@ If this calc decrements up strength to zero, that is the horizontal extent of th
 thermal_sim_poisson_segmented.py has 2 run options:
 1. Generate a single plot (visualize Poisson-distributed thermals with encircling downdrafts and flight log)
 2. Run Monte Carlo simulation (compute probability for a single scenario and export CSV)
+
 The script has variable parameters: defaults are
 NUM_SIMULATIONS_TRIALS = 10000, 
 SCENARIO_Z_CBL = 2500m (height of convective boundary layer), 
