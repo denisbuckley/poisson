@@ -49,7 +49,7 @@ SCENARIO_Z_CBL = 2500.0  # Convective Boundary Layer (CBL) height in meters
 SCENARIO_GLIDE_RATIO = 40  # Glider's glide ratio (e.g., 40:1)
 SCENARIO_MC_SNIFF = 4  # Pilot's Macready setting for sniffing in m/s
 SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.2  # Average number of thermals per square kilometer (Poisson lambda)
-SCENARIO_LAMBDA_STRENGTH = 8  # Mean strength of thermals (Poisson lambda, clamped 1-10 m/s)
+SCENARIO_LAMBDA_STRENGTH = 6  # Mean strength of thermals (Poisson lambda, clamped 1-10 m/s)
 
 
 # --- Helper function for calculating sniffing radius ---
@@ -553,7 +553,7 @@ if __name__ == '__main__':
         )
 
     elif choice == '2':
-        num_simulations = 100 # Number of trials for the Monte Carlo simulation
+        num_simulations = 100000 # Number of trials for the Monte Carlo simulation
 
         print(f"\n--- Running Monte Carlo Simulation for a Single Scenario ({num_simulations} trials) ---")
         print(f"Scenario Parameters:")
