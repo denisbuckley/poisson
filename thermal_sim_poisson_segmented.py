@@ -79,10 +79,10 @@ sink_rate_interp_600kg = interp1d(AIRSPEED_MS_600KG, SINK_MS_600KG, kind='linear
 # --- Scenario Parameters (Moved to Global Scope for Easy Configuration) ---
 # These parameters define the single simulation scenario.
 SCENARIO_Z_CBL = 2500.0  # Convective Boundary Layer (CBL) height in meters
-SCENARIO_GLIDER_WEIGHT_KG = 400  # Glider weight for polar lookup: 400 or 600 kg
+SCENARIO_GLIDER_WEIGHT_KG = 600  # Glider weight for polar lookup: 400 or 600 kg
 # SCENARIO_MC_SNIFF is now dynamically determined based on altitude bands
-SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.5  # Average number of thermals per square kilometer (Poisson lambda)
-SCENARIO_LAMBDA_STRENGTH = 3.0  # Mean strength of thermals (Poisson lambda, clamped 1-10 m/s)
+SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.3  # Average number of thermals per square kilometer (Poisson lambda)
+SCENARIO_LAMBDA_STRENGTH = 4.0  # Mean strength of thermals (Poisson lambda, clamped 1-10 m/s)
 SCENARIO_MC_SNIFF_TOP_MANUAL = 3.0  # NEW: Manually adjustable MC_Sniff for the top band
 
 
