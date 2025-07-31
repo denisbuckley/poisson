@@ -610,7 +610,7 @@ if __name__ == '__main__':
         # Fixed parameters for the simulation
         thermal_type_fixed = "NORMAL"
         glide_ratio_fixed = 40
-        num_simulations = 10000
+        num_simulations = 100
 
         # Iteration ranges for Z, Wt, and now MC_for_sniffing
         z_values = [1500, 2000, 2500, 3000]  # Z values from 1500 to 3000 in 500 intervals
