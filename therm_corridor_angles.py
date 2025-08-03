@@ -77,7 +77,7 @@ EPSILON = 1e-9
 MAX_SEARCH_DISTANCE_METERS = 162000.0  # 100 miles (approx 162 km)
 
 # --- AMENDED CODE: New constant for the glidepath corridor width ---
-GLIDEPATH_CORRIDOR_WIDTH_METERS = 200.0
+GLIDEPATH_CORRIDOR_WIDTH_METERS = 2000.0
 
 
 # --- Scenario Parameters (Moved to Global Scope for Easy Configuration) ---

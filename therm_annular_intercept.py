@@ -41,7 +41,7 @@ K_DOWNDRAFT_STRENGTH = 0.042194
 EPSILON = 1e-9
 
 # NEW CONSTANT: Maximum distance the glider will search for thermals
-MAX_SEARCH_DISTANCE_METERS = 1620.0  # 10 kilometers
+MAX_SEARCH_DISTANCE_METERS = 162000.0  # 10 kilometers
 
 # --- Scenario Parameters (Moved to Global Scope for Easy Configuration) ---
 # These parameters define the single simulation scenario.
