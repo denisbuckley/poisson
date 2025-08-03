@@ -24,7 +24,6 @@
 # - **NEW:** The initial line orientation is now randomized by generating a random
 #   end point at a fixed distance from the origin.
 # - **FIXED:** The final step is now labeled 'Final Glide' with distance and angle relative to the initial glide path.
-# - **NEW:** The length of the initial glide path and the total distance traveled are now printed.
 # - Visualization: The search arc is now visually drawn on the plot to demonstrate
 #   the search area for each path segment, and the specific intercepted thermal
 #   is highlighted with a unique marker.
@@ -158,7 +157,6 @@ def simulate_dynamic_glide_path_and_draw(
 
     current_pos = (0, 0)
     path_segments = []
-    total_distance_traveled = 0.0
 
     ax.plot(end_point[0], end_point[1], 's', color='black', markersize=10, label='End Point')
     ax.plot(current_pos[0], current_pos[1], 'o', color='blue', markersize=10, label='Start Point')
@@ -168,10 +166,7 @@ def simulate_dynamic_glide_path_and_draw(
     if bearing_to_end_initial < 0:
         bearing_to_end_initial += 360
 
-    initial_glide_path_length = math.hypot(end_point[0] - start_point[0], end_point[1] - start_point[1])
-
     print(f"Starting simulation from (0,0) to random end point {end_point}")
-    print(f"Initial Glide Path Length: {initial_glide_path_length:.2f} m")
     print(f"Initial Bearing from origin to end point: {bearing_to_end_initial:.2f}°")
 
     step = 0
@@ -242,8 +237,6 @@ def simulate_dynamic_glide_path_and_draw(
 
         if nearest_thermal:
             thermal_center = nearest_thermal['center']
-            segment_length_actual = math.hypot(thermal_center[0] - path_start[0], thermal_center[1] - path_start[1])
-            total_distance_traveled += segment_length_actual
             path_segments.append((path_start, thermal_center))
             current_pos = thermal_center
 
@@ -266,11 +259,10 @@ def simulate_dynamic_glide_path_and_draw(
 
         else:
             path_segments.append((path_start, end_point))
+            current_pos = end_point
 
             # Calculate distance and bearing for the final glide relative to the initial path
             final_glide_distance = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
-            total_distance_traveled += final_glide_distance
-
             final_glide_bearing = math.degrees(math.atan2(end_point[1] - path_start[1], end_point[0] - path_start[0]))
             if final_glide_bearing < 0:
                 final_glide_bearing += 360
@@ -283,10 +275,6 @@ def simulate_dynamic_glide_path_and_draw(
 
             print(
                 f"\nFinal Glide: {final_glide_distance:.2f} m, {final_glide_relative_bearing:.2f}° to end point {end_point}.")
-
-            current_pos = end_point  # Update the current position to break the loop
-
-    print(f"\nTotal distance travelled: {total_distance_traveled:.2f} m")
 
     # --- Plot the final path ---
     path_coords_x = []
