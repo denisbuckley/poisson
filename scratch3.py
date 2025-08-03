@@ -59,8 +59,10 @@ SCENARIO_MC_SNIFF = 2
 SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.1
 SCENARIO_LAMBDA_STRENGTH = 3
 SEARCH_ARC_ANGLE_DEGREES = 30.0
+# Adjusted for user request: initial glide path length is now 100km
 MAX_SEARCH_DISTANCE_METERS = 100000.0  # 100 kilometers for a dynamic path simulation
-RANDOM_END_POINT_DISTANCE = math.hypot(40000, 40000)
+# Adjusted for user request: random endpoint distance is now 100km
+RANDOM_END_POINT_DISTANCE = 100000.0
 
 
 # --- Helper functions (from previous scripts, unchanged) ---
@@ -133,11 +135,11 @@ def simulate_dynamic_glide_path_and_draw(
     effective_glide_path_length = MAX_SEARCH_DISTANCE_METERS
     ambient_wt_for_sniff_calc = lambda_strength
     sniffing_radius_meters_base = calculate_sniffing_radius(ambient_wt_for_sniff_calc, mc_for_sniffing_ms)
-    max_thermal_system_radius = FIXED_THERMAL_SYSTEM_OUTER_RADIUS_METERS
-    sim_area_side_meters = max(
-        math.hypot(end_point[0], end_point[1]) * 1.5,
-        effective_glide_path_length + max_thermal_system_radius * 2 + sniffing_radius_meters_base * 2
-    )
+
+    # Calculate the side of the simulation area to cover the full plot with padding
+    plot_padding = 10000.0  # 10 km
+    max_coord = max(abs(end_point[0]), abs(end_point[1]))
+    sim_area_side_meters = (max_coord + plot_padding) * 2
 
     updraft_thermals_info = generate_poisson_updraft_thermals(
         sim_area_side_meters, lambda_thermals_per_sq_km, lambda_strength
@@ -228,7 +230,7 @@ def simulate_dynamic_glide_path_and_draw(
             dist_to_lower_line, _ = distance_from_point_to_line_segment(thermal_center, path_start, arc_line_lower_end)
 
             is_near_arc_edge = (dist_to_upper_line <= sniffing_radius_meters_base) or (
-                        dist_to_lower_line <= sniffing_radius_meters_base)
+                    dist_to_lower_line <= sniffing_radius_meters_base)
 
             if (is_in_arc or is_near_arc_edge) and dist_to_thermal <= segment_length:
                 if dist_to_thermal < min_dist_to_thermal:
@@ -300,9 +302,12 @@ def simulate_dynamic_glide_path_and_draw(
 
     min_x, max_x = min(all_x), max(all_x)
     min_y, max_y = min(all_y), max(all_y)
-    padding = max(abs(min_x), abs(max_x), abs(min_y), abs(max_y)) * 0.1
-    ax.set_xlim(min_x - padding, max_x + padding)
-    ax.set_ylim(min_y - padding, max_y + padding)
+
+    # Adjusted for user request: 10km padding
+    plot_padding = 10000.0
+
+    ax.set_xlim(min_x - plot_padding, max_x + plot_padding)
+    ax.set_ylim(min_y - plot_padding, max_y + plot_padding)
     ax.set_xlabel('East-West (m)')
     ax.set_ylabel('North-South (m)')
     ax.set_title(f"Dynamic Glider Path Simulation with Thermal Intercepts")
@@ -329,11 +334,10 @@ def simulate_intercept_experiment_dynamic(
     if sniffing_radius_meters_base <= 0:
         return False
 
-    max_thermal_system_radius = FIXED_THERMAL_SYSTEM_OUTER_RADIUS_METERS
-    sim_area_side_meters = max(
-        math.hypot(end_point[0], end_point[1]) * 1.5,
-        effective_glide_path_length + max_thermal_system_radius * 2 + sniffing_radius_meters_base * 2
-    )
+    # Calculate the side of the simulation area to cover the full plot with padding
+    plot_padding = 10000.0
+    max_coord = max(abs(end_point[0]), abs(end_point[1]))
+    sim_area_side_meters = (max_coord + plot_padding) * 2
 
     updraft_thermals_info = generate_poisson_updraft_thermals(
         sim_area_side_meters, lambda_thermals_per_sq_km, lambda_strength
@@ -391,7 +395,7 @@ def simulate_intercept_experiment_dynamic(
             dist_to_lower_line, _ = distance_from_point_to_line_segment(thermal_center, path_start, arc_line_lower_end)
 
             is_near_arc_edge = (dist_to_upper_line <= sniffing_radius_meters_base) or (
-                        dist_to_lower_line <= sniffing_radius_meters_base)
+                    dist_to_lower_line <= sniffing_radius_meters_base)
 
             if (is_in_arc or is_near_arc_edge) and dist_to_thermal <= segment_length:
                 if dist_to_thermal < min_dist_to_thermal:
