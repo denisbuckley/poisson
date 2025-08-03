@@ -1,117 +1,165 @@
-# --- SCRIPT CHARACTERISTICS ---
-# This is a comprehensive Monte Carlo simulation script for a glider's thermal interception.
-# The simulation environment models a 2D plane with Poisson-distributed thermals.
-# Each thermal consists of a core updraft region and an encircling downdraft ring.
-# The script can run in two modes:
-#   1. A single-run visualization mode that generates a plot of the thermal field,
-#      the glider's dynamic flight path (multiple segments), and any intercepts.
-#   2. A large-scale Monte Carlo simulation mode that calculates the statistical
-#      probability of a successful thermal intercept over many trials.
-#
-# Key Features:
-# - Thermal Placement: Uses a Poisson distribution to place thermals randomly and
-#   realistically throughout the simulation area.
-# - Thermal Properties: Thermal updraft strength is also Poisson-distributed
-#   (clamped 1-10 m/s), and the updraft radius is derived from this strength.
-# - Downdraft Modeling: A fixed-diameter downdraft ring encircles each updraft.
-# - Dynamic Flight Path: The glider's path is no longer a single straight line.
-#   It is an iterative, multi-segment path where the glider "moves" to an intercepted
-#   thermal before continuing its flight towards a final destination.
-# - **NEW:** Climb and Restart Logic: If an intercepted updraft's strength is greater
-#   than or equal to the current MC_Sniff setting, the glider instantaneously
-#   "climbs" back to CBL height and "restarts" its glide from that horizontal position.
-# - Interception Logic: A thermal is considered a potential intercept if its center is within the
-#   search arc OR if its sniffing radius overlaps with the search arc's boundary lines.
-# - **FIXED:** The bug causing an infinite loop has been resolved. Intercepted thermals are now
-#   removed from the list of available thermals, forcing the glider to always move forward.
-# - **NEW:** The initial line orientation is now randomized by generating a random
-#   end point at a fixed distance from the origin.
-# - **FIXED:** The final step is now labeled 'Final Glide' with distance and angle relative to the initial glide path.
-# - Visualization: The search arc is now visually drawn on the plot to demonstrate
-#   the search area for each path segment, and the specific intercepted thermal
-#   is highlighted with a unique marker.
-# - Data Output: The output for the single plot mode is now simplified to only
-#   show the distance from the origin and the relative bearing, without redundant labels.
-# - Modularity: The script is designed with a clear separation of concerns,
-#   using functions for thermal generation, intersection checks, and visualization,
-#   making it easy to understand and modify parameters.
-# -----------------------------
+# Comprehensive Monte Carlo simulation designed to calculate the probability of a glider intercepting an updraft thermal.
+# This version uses a Poisson distribution for spatial thermal placement and for thermal strengths.
+# All generated thermals are updrafts, with derived downdraft rings encircling them.
+# IMPORTANT: The LENGTH of the glider's search path for thermals is a variable on line 35 in km.
+# SIMILARLY: The LAMBDA variable sets the AMBIENT Thermal Strength
+# AND: SCENARIO_MC_SNIFF sets the diameter of the search from the thermal centre, effectively the
+# Macready setting and sensitivity for sniffing thermals
+
+#########
+# This is the BASIC MC sim on which more complex scripts in this repo are built.
+# It can be used to calculate prob of intercepting a thermal with chosen parameter values
+# Specifically, and for example, LAMBDA 4.0, LENGTH 10miles, DENSITY 0.3, yields prob 0.1, as per Cochrane 1999
+########
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 import math
 import random
-from tqdm import tqdm
-import csv
+from tqdm import tqdm  # For progress bar
+import csv  # For CSV export
 
 # --- Constants ---
-KNOT_TO_MS = 0.514444
-FT_TO_M = 0.3048
+KNOT_TO_MS = 0.514444  # 1 knot = 0.514444 m/s
+FT_TO_M = 0.3048  # 1 foot = 0.3048 m
 
-C_UPDRAFT_STRENGTH_DECREMENT = 5.9952e-7
+# Constant 'C' derived from the updraft strength formula: y_m/s = C * x_m^3
+# Where C = 0.033 * KNOT_TO_MS / (100 * FT_TO_M)**3
+C_UPDRAFT_STRENGTH_DECREMENT = 5.9952e-7  # Approximately 5.995248074266928e-07
+
+# Fixed outer diameter for the entire thermal system (updraft + downdraft ring)
+# This means the downdraft ring extends from the updraft's edge to this outer radius.
 FIXED_THERMAL_SYSTEM_OUTER_DIAMETER_METERS = 1200.0
-FIXED_THERMAL_SYSTEM_OUTER_RADIUS_METERS = FIXED_THERMAL_SYSTEM_OUTER_DIAMETER_METERS / 2
+FIXED_THERMAL_SYSTEM_OUTER_RADIUS_METERS = FIXED_THERMAL_SYSTEM_OUTER_DIAMETER_METERS / 2  # 600m
+
+# Constant for downdraft strength calculation: W_down = K * Wt_ms^(5/3)
+# Where K = 0.042194 (derived from previous discussions)
 K_DOWNDRAFT_STRENGTH = 0.042194
+
+# Global epsilon for floating point comparisons
 EPSILON = 1e-9
-MIN_SAFE_ALTITUDE = 500.0  # Minimum altitude for a safe landing
 
-# --- Scenario Parameters ---
-SCENARIO_Z_CBL = 2500.0
-SCENARIO_GLIDE_RATIO = 40
-SCENARIO_MC_SNIFF = 2
-SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.1
-SCENARIO_LAMBDA_STRENGTH = 3
-SEARCH_ARC_ANGLE_DEGREES = 30.0
-# The maximum search distance is now dynamically calculated, but this serves as a cap for the initial endpoint generation.
-RANDOM_END_POINT_DISTANCE = 100000.0
+# NEW CONSTANT: Maximum distance the glider will search for thermals
+MAX_SEARCH_DISTANCE_METERS = 162000.0  # 162 kilometers (100 miles)
+
+# NEW CONSTANT: The width of the glider's search corridor
+GLIDE_PATH_WIDTH_METERS = 2000.0  # 5 km wide path
+
+# --- Scenario Parameters (Moved to Global Scope for Easy Configuration) ---
+# These parameters define the single simulation scenario.
+SCENARIO_Z_CBL = 2500.0  # Convective Boundary Layer (CBL) height in meters
+SCENARIO_GLIDE_RATIO = 40  # Glider's glide ratio (e.g., 40:1)
+SCENARIO_MC_SNIFF = 2  # Pilot's Macready setting for sniffing in m/s
+SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.2  # Average number of thermals per square kilometer (Poisson lambda)
+SCENARIO_LAMBDA_STRENGTH = 3  # Mean strength of thermals (Poisson lambda, clamped 1-10 m/s)
 
 
-# --- Helper functions (from previous scripts, unchanged) ---
+# --- Helper function for calculating sniffing radius ---
 def calculate_sniffing_radius(Wt_ms_ambient, MC_for_sniffing_ms, thermal_type="NORMAL"):
+    """
+    Calculates the sniffing radius based on ambient thermal strength (Wt_ms_ambient)
+    and the pilot's Macready setting for sniffing (MC_for_sniffing_ms).
+
+    Args:
+        Wt_ms_ambient (float): Ambient Thermal Strength in m/s.
+        MC_for_sniffing_ms (float): Macready speed in m/s, used for sniffing radius calculation.
+        thermal_type (str): "NORMAL" or "NARROW" (affects C_thermal constant).
+
+    Returns:
+        float: The calculated sniffing radius in meters.
+    """
     C_thermal = 0.033 if thermal_type == "NORMAL" else 0.10
+
     Wt_knots_for_sniff = Wt_ms_ambient / KNOT_TO_MS
     MC_knots_for_sniff = MC_for_sniffing_ms / KNOT_TO_MS
     y_MC_knots_for_sniff = Wt_knots_for_sniff - MC_knots_for_sniff
+
+    # R_sniffing_feet is the radius where the Macready speed equals the ambient Wt
+    # Handle cases where y_MC_knots_for_sniff / C_thermal is non-positive
     if y_MC_knots_for_sniff / C_thermal > 0:
         R_sniffing_feet = 100 * ((y_MC_knots_for_sniff / C_thermal) ** (1 / 3))
     else:
         R_sniffing_feet = 0
+
     D_sniffing_meters = 2 * (R_sniffing_feet * FT_TO_M)
-    return D_sniffing_meters / 2
+    sniffing_radius_meters = D_sniffing_meters / 2
+
+    return sniffing_radius_meters
 
 
-def distance_from_point_to_line_segment(point, line_start, line_end):
-    px, py = point
-    x1, y1 = line_start
-    x2, y2 = line_end
-    dx, dy = x2 - x1, y2 - y1
-    line_segment_length_sq = dx * dx + dy * dy
-    if line_segment_length_sq == 0:
-        closest_x, closest_y = x1, y1
-        distance = math.sqrt((px - x1) ** 2 + (py - y1) ** 2)
-        return distance, (closest_x, closest_y)
-    t = ((px - x1) * dx + (py - y1) * dy) / line_segment_length_sq
-    t = max(0, min(1, t))
-    closest_x = x1 + t * dx
-    closest_y = y1 + t * dy
-    distance = math.sqrt((px - closest_x) ** 2 + (py - closest_y) ** 2)
-    return distance, (closest_x, closest_y)
+# --- Helper function for circle-rectangle intersection check ---
+def check_circle_rectangle_intersection(circle_center, radius, rect_center, rect_width, rect_height, rect_angle_radians):
+    """
+    Checks if a circle intersects with a rotated rectangle.
+
+    Args:
+        circle_center (tuple): (cx, cy) coordinates of the circle's center.
+        radius (float): Radius of the circle.
+        rect_center (tuple): (rx, ry) coordinates of the rectangle's center.
+        rect_width (float): Width of the rectangle (along its local x-axis).
+        rect_height (float): Height of the rectangle (along its local y-axis).
+        rect_angle_radians (float): Rotation of the rectangle in radians.
+
+    Returns:
+        bool: True if the circle intersects the rectangle, False otherwise.
+    """
+    cx, cy = circle_center
+    rx, ry = rect_center
+    angle = -rect_angle_radians  # Rotate the circle's center, not the rectangle
+
+    # Translate and rotate the circle center to the rectangle's local coordinate system
+    dx = cx - rx
+    dy = cy - ry
+    rotated_cx = dx * math.cos(angle) - dy * math.sin(angle)
+    rotated_cy = dx * math.sin(angle) + dy * math.cos(angle)
+
+    # Find the closest point on the rectangle to the rotated circle center
+    closest_x = np.clip(rotated_cx, -rect_width / 2, rect_width / 2)
+    closest_y = np.clip(rotated_cy, -rect_height / 2, rect_height / 2)
+
+    # Calculate the distance squared from the rotated circle center to this closest point
+    distance_x = rotated_cx - closest_x
+    distance_y = rotated_cy - closest_y
+    distance_squared = distance_x**2 + distance_y**2
+
+    return distance_squared < radius**2
 
 
 def generate_poisson_updraft_thermals(sim_area_side_meters, lambda_thermals_per_sq_km, lambda_strength):
+    """
+    Generates only updraft thermal positions and properties using a Poisson distribution.
+    Downdraft rings are derived from these updrafts later.
+
+    Args:
+        sim_area_side_meters (float): The side length of the square simulation area in meters.
+        lambda_thermals_per_sq_km (float): The average number of thermals per square kilometer.
+        lambda_strength (float): The mean (lambda) for the Poisson distribution of thermal strength magnitude.
+
+    Returns:
+        list: A list of dictionaries, each representing an updraft thermal with its properties.
+              [{'center': (x, y), 'updraft_radius': r, 'updraft_strength': s}, ...]
+    """
     sim_area_sq_km = (sim_area_side_meters / 1000) ** 2
     expected_num_thermals = lambda_thermals_per_sq_km * sim_area_sq_km
     num_thermals = np.random.poisson(expected_num_thermals)
+
     updraft_thermals = []
     for _ in range(num_thermals):
+        # Generate random position within the simulation area (centered at 0,0)
         center_x = random.uniform(-sim_area_side_meters / 2, sim_area_side_meters / 2)
         center_y = random.uniform(-sim_area_side_meters / 2, sim_area_side_meters / 2)
+
+        # Generate strength magnitude (Poisson distributed, clamped to 1-10)
         updraft_strength_magnitude = 0
-        while updraft_strength_magnitude == 0:
+        while updraft_strength_magnitude == 0:  # Re-roll if 0 is generated, ensure min strength of 1
             updraft_strength_magnitude = np.random.poisson(lambda_strength)
-        updraft_strength_magnitude = min(10, updraft_strength_magnitude)
+        updraft_strength_magnitude = min(10, updraft_strength_magnitude)  # Cap at 10 m/s
+
+        # Calculate updraft radius where strength goes to zero based on formula
+        # Wt_ms = C * R_up^3 => R_up = (Wt_ms / C)^(1/3)
         updraft_radius = (updraft_strength_magnitude / C_UPDRAFT_STRENGTH_DECREMENT) ** (1 / 3)
+
         updraft_thermals.append({
             'center': (center_x, center_y),
             'updraft_radius': updraft_radius,
@@ -120,386 +168,277 @@ def generate_poisson_updraft_thermals(sim_area_side_meters, lambda_thermals_per_
     return updraft_thermals
 
 
-# --- Main Dynamic Simulation Function for Visualization ---
-def simulate_dynamic_glide_path_and_draw(
+def draw_poisson_thermals_and_glide_path_with_intercept_check(
         z_cbl_meters, glide_ratio, mc_for_sniffing_ms,
         lambda_thermals_per_sq_km, lambda_strength,
-        end_point, fig_width=12, fig_height=12
+        glide_path_width_meters,
+        fig_width=12, fig_height=12
 ):
+    """
+    Draws a single visualization of the thermal grid (Poisson distributed),
+    with updrafts and encircling downdraft rings, glide path, and intercepts.
+    The glide path search is now a rectangle with a specified width.
+    """
     fig, ax = plt.subplots(1, figsize=(fig_width, fig_height))
     ax.set_aspect('equal')
 
-    # The simulation area must be large enough to contain the entire flight path
-    plot_padding = 20000.0  # 20 km
-    max_coord = max(abs(end_point[0]), abs(end_point[1]))
-    sim_area_side_meters = (max_coord + plot_padding) * 2
+    # --- Calculations for Glide Path Length ---
+    available_glide_height = z_cbl_meters - 500  # Glider needs to start landing at 500 AGL
+    if available_glide_height <= 0:
+        print(
+            f"Warning: Z = {z_cbl_meters}m results in non-positive available glide height ({available_glide_height}m). Cannot draw meaningful glide path.")
+        plt.title(f"Cannot draw glide path for Z={z_cbl_meters}m (Available Height <= 0m AGL)")
+        plt.show()
+        return
+
+    glide_path_horizontal_length_meters = available_glide_height * glide_ratio
+
+    # NEW: Limit the effective glide path length for search and plotting
+    effective_glide_path_length = min(glide_path_horizontal_length_meters, MAX_SEARCH_DISTANCE_METERS)
+
+    # --- Determine Simulation Area Side Length ---
+    ambient_wt_for_sniff_calc = lambda_strength
+    sniffing_radius_meters = calculate_sniffing_radius(
+        ambient_wt_for_sniff_calc, mc_for_sniffing_ms
+    )
+    if sniffing_radius_meters <= 0:
+        print("Warning: Calculated Macready sniffing radius is non-positive. Setting to 1m for visualization.")
+        sniffing_radius_meters = 1.0
+
+    max_thermal_system_radius = FIXED_THERMAL_SYSTEM_OUTER_RADIUS_METERS
+    sim_area_side_meters = (
+                                       effective_glide_path_length + max_thermal_system_radius * 2 + sniffing_radius_meters * 2 + glide_path_width_meters) * 1.1
 
     updraft_thermals_info = generate_poisson_updraft_thermals(
         sim_area_side_meters, lambda_thermals_per_sq_km, lambda_strength
     )
 
+    # --- Plotting the Glide Path Rectangle as a Polygon ---
+    path_angle_radians = random.uniform(0, 2 * math.pi)
+    rect_center_x = (effective_glide_path_length / 2) * math.cos(path_angle_radians)
+    rect_center_y = (effective_glide_path_length / 2) * math.sin(path_angle_radians)
+
+    # Calculate corner points of the rotated rectangle
+    half_width = effective_glide_path_length / 2
+    half_height = glide_path_width_meters / 2
+    cos_angle = math.cos(path_angle_radians)
+    sin_angle = math.sin(path_angle_radians)
+
+    # Local coordinates of corners relative to center (0,0)
+    p1 = (half_width, half_height)
+    p2 = (-half_width, half_height)
+    p3 = (-half_width, -half_height)
+    p4 = (half_width, -half_height)
+
+    # Rotate and translate corners
+    corners = []
+    for x, y in [p1, p2, p3, p4]:
+        rotated_x = x * cos_angle - y * sin_angle
+        rotated_y = x * sin_angle + y * cos_angle
+        corners.append((rotated_x + rect_center_x, rotated_y + rect_center_y))
+
+    glide_path_polygon = patches.Polygon(corners, color='blue', alpha=0.2, zorder=1)
+    ax.add_patch(glide_path_polygon)
+
+    # --- Plot Thermals (Updrafts and Encircling Downdrafts) ---
     for thermal_info in updraft_thermals_info:
         updraft_center = thermal_info['center']
         updraft_radius = thermal_info['updraft_radius']
-        updraft_circle = patches.Circle(updraft_center, updraft_radius, facecolor='red', alpha=0.6, edgecolor='black',
-                                        linewidth=0.5)
+
+        updraft_circle = patches.Circle(
+            updraft_center,
+            updraft_radius,
+            facecolor='red',
+            alpha=0.6,
+            edgecolor='black',
+            linewidth=0.5
+        )
         ax.add_patch(updraft_circle)
+
+        downdraft_inner_radius = updraft_radius
         downdraft_outer_radius = FIXED_THERMAL_SYSTEM_OUTER_RADIUS_METERS
-        if downdraft_outer_radius > updraft_radius:
-            downdraft_annulus = patches.Circle(updraft_center, downdraft_outer_radius, facecolor='green', alpha=0.05,
-                                               edgecolor='green', linewidth=0.5, fill=True, hatch='/')
+
+        if downdraft_outer_radius > downdraft_inner_radius:
+            downdraft_annulus = patches.Circle(
+                updraft_center,
+                downdraft_outer_radius,
+                facecolor='green',
+                alpha=0.05,
+                edgecolor='green',
+                linewidth=0.5,
+                fill=True,
+                hatch='/'
+            )
             ax.add_patch(downdraft_annulus)
 
-    current_pos = (0, 0)
-    current_altitude = z_cbl_meters
-    path_segments = []
+    # --- Perform Intersection Checks ---
+    updraft_intercepts_count = 0
+    downdraft_encounters_count = 0
 
-    ax.plot(end_point[0], end_point[1], 's', color='black', markersize=10, label='End Point')
-    ax.plot(current_pos[0], current_pos[1], 'o', color='blue', markersize=10, label='Start Point')
+    rect_center = (rect_center_x, rect_center_y)
+    for thermal_info in updraft_thermals_info:
+        updraft_center = thermal_info['center']
 
-    start_point = current_pos
-    bearing_to_end_initial = math.degrees(math.atan2(end_point[1] - start_point[1], end_point[0] - start_point[0]))
-    if bearing_to_end_initial < 0:
-        bearing_to_end_initial += 360
-
-    print(f"Starting simulation from (0,0) to random end point {end_point}")
-    print(f"Initial Bearing from origin to end point: {bearing_to_end_initial:.2f}°")
-
-    step = 0
-    while math.hypot(end_point[0] - current_pos[0],
-                     end_point[1] - current_pos[1]) > EPSILON and current_altitude > MIN_SAFE_ALTITUDE:
-        step += 1
-        path_start = current_pos
-        current_altitude_before_glide = current_altitude
-
-        available_glide_height = current_altitude - MIN_SAFE_ALTITUDE
-        segment_length = available_glide_height * glide_ratio
-
-        distance_to_end = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
-
-        if distance_to_end <= 0:
-            break
-
-        bearing_to_end_radians = math.atan2(end_point[1] - path_start[1], end_point[0] - path_start[0])
-        bearing_to_end_degrees = math.degrees(bearing_to_end_radians)
-        if bearing_to_end_degrees < 0:
-            bearing_to_end_degrees += 360
-
-        arc_half_angle_degrees = SEARCH_ARC_ANGLE_DEGREES / 2
-        search_distance = min(distance_to_end, segment_length)
-
-        # Plot search arc
-        arc_start_angle = bearing_to_end_degrees - arc_half_angle_degrees
-        arc_end_angle = bearing_to_end_degrees + arc_half_angle_degrees
-        wedge = patches.Wedge(
-            path_start, search_distance,
-            arc_start_angle, arc_end_angle,
-            facecolor='gray', alpha=0.1, edgecolor='none'
+        intersects_sniffing = check_circle_rectangle_intersection(
+            updraft_center, sniffing_radius_meters,
+            rect_center, effective_glide_path_length, glide_path_width_meters, path_angle_radians
         )
-        ax.add_patch(wedge)
 
-        path_end = (path_start[0] + search_distance * math.cos(bearing_to_end_radians),
-                    path_start[1] + search_distance * math.sin(bearing_to_end_radians))
+        if intersects_sniffing:
+            updraft_intercepts_count += 1
+            sniffing_circle_patch = patches.Circle(
+                updraft_center, sniffing_radius_meters, color='purple', fill=False, alpha=0.1, linestyle='--',
+                linewidth=0.5
+            )
+            ax.add_patch(sniffing_circle_patch)
 
-        nearest_thermal = None
-        min_dist_to_thermal = float('inf')
+            ax.plot(updraft_center[0], updraft_center[1], 'X', color='red', markersize=10,
+                    markeredgecolor='black', linewidth=1.5)
 
-        # Calculate sniffing radius for the current thermal field parameters
-        ambient_wt_for_sniff_calc = lambda_strength
-        sniffing_radius_meters_base = calculate_sniffing_radius(ambient_wt_for_sniff_calc, mc_for_sniffing_ms)
+        downdraft_inner_radius = thermal_info['updraft_radius']
+        downdraft_outer_radius = FIXED_THERMAL_SYSTEM_OUTER_RADIUS_METERS
 
-        for thermal in updraft_thermals_info:
-            thermal_center = thermal['center']
-            dist_to_thermal = math.hypot(thermal_center[0] - path_start[0], thermal_center[1] - path_start[1])
+        if downdraft_outer_radius > downdraft_inner_radius:
+            intersects_downdraft = check_circle_rectangle_intersection(
+                updraft_center, downdraft_outer_radius,
+                rect_center, effective_glide_path_length, glide_path_width_meters, path_angle_radians
+            )
+            if intersects_downdraft:
+                is_in_updraft_core = check_circle_rectangle_intersection(
+                    updraft_center, downdraft_inner_radius,
+                    rect_center, effective_glide_path_length, glide_path_width_meters, path_angle_radians
+                )
+                if not is_in_updraft_core:
+                    downdraft_encounters_count += 1
+                    ax.plot(updraft_center[0], updraft_center[1], 'o', color='green',
+                            markersize=8, markeredgecolor='black', linewidth=1.0)
 
-            if dist_to_thermal > search_distance:
-                continue
 
-            thermal_bearing_from_start = math.degrees(
-                math.atan2(thermal_center[1] - path_start[1], thermal_center[0] - path_start[0]))
-            if thermal_bearing_from_start < 0:
-                thermal_bearing_from_start += 360
+    # --- Construct the footer text for the plot ---
+    footer_text = (
+        f"Z={z_cbl_meters}m, Glide Path: {glide_ratio}:1, Length={glide_path_horizontal_length_meters / 1000:.1f}km\n"
+        f"Search Corridor Width: {glide_path_width_meters / 1000:.1f}km\n"
+        f"Search Limit: {MAX_SEARCH_DISTANCE_METERS / 1000:.0f}km\n"
+        f"Thermal Density: {lambda_thermals_per_sq_km}/km², Avg Strength: {lambda_strength} (1-10m/s)\n"
+        f"Sniffing Radius: {sniffing_radius_meters:.0f}m (MC={mc_for_sniffing_ms}m/s)\n"
+        f"Updraft Intercepts (within corridor): {updraft_intercepts_count}\n"
+        f"Downdraft Encounters (within corridor): {downdraft_encounters_count}"
+    )
 
-            angle_from_line = thermal_bearing_from_start - bearing_to_end_degrees
-            if angle_from_line > 180:
-                angle_from_line -= 360
-            elif angle_from_line <= -180:
-                angle_from_line += 360
+    fig.text(0.5, 0.01, footer_text, ha='center', va='bottom', fontsize=9, color='gray')
 
-            is_in_arc = abs(angle_from_line) <= arc_half_angle_degrees
+    plot_limit_extent = sim_area_side_meters / 2
+    plot_padding_factor = 0.05
+    ax.set_xlim(-(plot_limit_extent * (1 + plot_padding_factor)), plot_limit_extent * (1 + plot_padding_factor))
+    ax.set_ylim(-(plot_limit_extent * (1 + plot_padding_factor)), plot_limit_extent * (1 + plot_padding_factor))
 
-            arc_line_upper_end = (path_start[0] + search_distance * math.cos(math.radians(arc_end_angle)),
-                                  path_start[1] + search_distance * math.sin(math.radians(arc_end_angle)))
-            arc_line_lower_end = (path_start[0] + search_distance * math.cos(math.radians(arc_start_angle)),
-                                  path_start[1] + search_distance * math.sin(math.radians(arc_start_angle)))
-
-            dist_to_upper_line, _ = distance_from_point_to_line_segment(thermal_center, path_start, arc_line_upper_end)
-            dist_to_lower_line, _ = distance_from_point_to_line_segment(thermal_center, path_start, arc_line_lower_end)
-
-            is_near_arc_edge = (dist_to_upper_line <= sniffing_radius_meters_base) or (
-                    dist_to_lower_line <= sniffing_radius_meters_base)
-
-            if (is_in_arc or is_near_arc_edge):
-                if dist_to_thermal < min_dist_to_thermal:
-                    min_dist_to_thermal = dist_to_thermal
-                    nearest_thermal = thermal
-
-        if nearest_thermal:
-            thermal_center = nearest_thermal['center']
-
-            # Calculate altitude drop during this glide segment
-            altitude_drop = min_dist_to_thermal / glide_ratio
-            current_altitude -= altitude_drop
-            path_segments.append((path_start, thermal_center))
-            current_pos = thermal_center
-
-            # Remove the intercepted thermal so it's not found again
-            updraft_thermals_info.remove(nearest_thermal)
-
-            thermal_dist = math.hypot(thermal_center[0] - start_point[0], thermal_center[1] - start_point[1])
-            thermal_bearing = math.degrees(
-                math.atan2(thermal_center[1] - start_point[1], thermal_center[0] - start_point[0]))
-            if thermal_bearing < 0:
-                thermal_bearing += 360
-
-            relative_bearing = thermal_bearing - bearing_to_end_initial
-            if relative_bearing > 180:
-                relative_bearing -= 360
-            elif relative_bearing <= -180:
-                relative_bearing += 360
-
-            # Check for climb and restart
-            if nearest_thermal['updraft_strength'] >= mc_for_sniffing_ms:
-                print(
-                    f"\n{step}: Intercept at {thermal_dist:.2f} m, {relative_bearing:.2f}° at height {current_altitude:.0f} m. Updraft strength {nearest_thermal['updraft_strength']:.1f} m/s. Climbing to CBL ({z_cbl_meters}m) and restarting glide.")
-                current_altitude = z_cbl_meters
-            else:
-                print(
-                    f"\n{step}: Intercept at {thermal_dist:.2f} m, {relative_bearing:.2f}° at height {current_altitude:.0f} m. Updraft strength {nearest_thermal['updraft_strength']:.1f} m/s is too weak. Continuing glide.")
-
-        else:
-            path_segments.append((path_start, path_end))
-            current_pos = path_end
-
-            # Calculate altitude drop for the full glide segment
-            altitude_drop = search_distance / glide_ratio
-            current_altitude -= altitude_drop
-
-            # Final glide to end point
-            final_glide_distance = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
-            final_glide_bearing = math.degrees(math.atan2(end_point[1] - path_start[1], end_point[0] - path_start[0]))
-            if final_glide_bearing < 0:
-                final_glide_bearing += 360
-
-            final_glide_relative_bearing = final_glide_bearing - bearing_to_end_initial
-            if final_glide_relative_bearing > 180:
-                final_glide_relative_bearing -= 360
-            elif final_glide_relative_bearing <= -180:
-                final_glide_relative_bearing += 360
-
-            print(
-                f"\nFinal Glide: {final_glide_distance:.2f} m, {final_glide_relative_bearing:.2f}° to end point {end_point}.")
-            break
-
-    # --- Plot the final path ---
-    path_coords_x = []
-    path_coords_y = []
-
-    for i, (start, end) in enumerate(path_segments):
-        ax.plot([start[0], end[0]], [start[1], end[1]], 'b--', alpha=0.5, linewidth=1)
-        path_coords_x.append(start[0])
-        path_coords_y.append(start[1])
-        if i < len(path_segments) - 1:
-            path_coords_x.append(end[0])
-            path_coords_y.append(end[1])
-            ax.plot(end[0], end[1], 'x', color='red', markersize=8, markeredgecolor='black', linewidth=1)
-
-    if len(path_segments) > 0:
-        path_coords_x.append(path_segments[-1][1][0])
-        path_coords_y.append(path_segments[-1][1][1])
-
-    ax.plot(path_coords_x, path_coords_y, color='blue', linewidth=2, label='Glider Path')
-    ax.plot([], [], 'x', color='red', markersize=8, markeredgecolor='black', linewidth=1, label='Intercepted Thermal')
-
-    all_x = path_coords_x + [t['center'][0] for t in updraft_thermals_info]
-    all_y = path_coords_y + [t['center'][1] for t in updraft_thermals_info]
-
-    min_x, max_x = min(all_x), max(all_x)
-    min_y, max_y = min(all_y), max(all_y)
-
-    plot_padding_x = (max_x - min_x) * 0.1
-    plot_padding_y = (max_y - min_y) * 0.1
-
-    ax.set_xlim(min_x - plot_padding_x, max_x + plot_padding_x)
-    ax.set_ylim(min_y - plot_padding_y, max_y + plot_padding_y)
-    ax.set_xlabel('East-West (m)')
-    ax.set_ylabel('North-South (m)')
-    ax.set_title(f"Dynamic Glider Path Simulation with Thermal Intercepts")
-    ax.legend()
     plt.show()
 
 
-# --- Main Dynamic Simulation Function for Monte Carlo ---
-def simulate_intercept_experiment_dynamic(
+def simulate_intercept_experiment_poisson(
         z_cbl_meters, glide_ratio, mc_for_sniffing_ms,
         lambda_thermals_per_sq_km, lambda_strength,
-        end_point
+        glide_path_width_meters
 ):
-    # The simulation area must be large enough to contain the entire flight path
-    plot_padding = 20000.0  # 20 km
-    max_coord = max(abs(end_point[0]), abs(end_point[1]))
-    sim_area_side_meters = (max_coord + plot_padding) * 2
+    """
+    Performs a single Monte Carlo experiment with Poisson-distributed updraft thermals
+    to check for an intercept with an updraft's sniffing radius within a wide rectangular path.
 
-    updraft_thermals_info = generate_poisson_updraft_thermals(
+    Args:
+        z_cbl_meters (float): The convective boundary layer height (Z) for this simulation.
+        glide_ratio (int): The fixed glide ratio of the glider.
+        mc_for_sniffing_ms (float): The Macready speed used to calculate the sniffing radius.
+        lambda_thermals_per_sq_km (float): The average number of thermals per square kilometer.
+        lambda_strength (float): The mean (lambda) for the Poisson distribution of thermal strength magnitude.
+        glide_path_width_meters (float): The width of the rectangular glide path.
+
+    Returns:
+        bool: True if at least one thermal's sniffing radius intersects the path, False otherwise.
+    """
+    available_glide_height = z_cbl_meters - 500
+    if available_glide_height <= 0:
+        return False
+
+    glide_path_horizontal_length_meters = available_glide_height * glide_ratio
+    effective_glide_path_length = min(glide_path_horizontal_length_meters, MAX_SEARCH_DISTANCE_METERS)
+
+    if effective_glide_path_length <= 0:
+        return False
+
+    ambient_wt_for_sniff_calc = lambda_strength
+    sniffing_radius_meters = calculate_sniffing_radius(
+        ambient_wt_for_sniff_calc, mc_for_sniffing_ms
+    )
+    if sniffing_radius_meters <= 0:
+        return False
+
+    max_thermal_system_radius = FIXED_THERMAL_SYSTEM_OUTER_RADIUS_METERS
+    sim_area_side_meters = (
+                                       effective_glide_path_length + max_thermal_system_radius * 2 + sniffing_radius_meters * 2 + glide_path_width_meters) * 1.1
+
+    updraft_thermals = generate_poisson_updraft_thermals(
         sim_area_side_meters, lambda_thermals_per_sq_km, lambda_strength
     )
 
-    current_pos = (0, 0)
-    current_altitude = z_cbl_meters
-    has_intercepted_thermal = False
+    path_angle_radians = random.uniform(0, 2 * math.pi)
+    rect_center_x = (effective_glide_path_length / 2) * math.cos(path_angle_radians)
+    rect_center_y = (effective_glide_path_length / 2) * math.sin(path_angle_radians)
+    rect_center = (rect_center_x, rect_center_y)
 
-    while math.hypot(end_point[0] - current_pos[0],
-                     end_point[1] - current_pos[1]) > EPSILON and current_altitude > MIN_SAFE_ALTITUDE:
-        path_start = current_pos
+    for thermal_info in updraft_thermals:
+        updraft_center = thermal_info['center']
+        intersects_sniffing = check_circle_rectangle_intersection(
+            updraft_center, sniffing_radius_meters,
+            rect_center, effective_glide_path_length, glide_path_width_meters, path_angle_radians
+        )
+        if intersects_sniffing:
+            return True
 
-        available_glide_height = current_altitude - MIN_SAFE_ALTITUDE
-        segment_length = available_glide_height * glide_ratio
-
-        distance_to_end = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
-
-        if distance_to_end <= 0:
-            break
-
-        bearing_to_end_radians = math.atan2(end_point[1] - path_start[1], end_point[0] - path_start[0])
-        bearing_to_end_degrees = math.degrees(bearing_to_end_radians)
-        if bearing_to_end_degrees < 0:
-            bearing_to_end_degrees += 360
-
-        arc_half_angle_degrees = SEARCH_ARC_ANGLE_DEGREES / 2
-        search_distance = min(distance_to_end, segment_length)
-
-        path_end = (path_start[0] + search_distance * math.cos(bearing_to_end_radians),
-                    path_start[1] + search_distance * math.sin(bearing_to_end_radians))
-
-        nearest_thermal = None
-        min_dist_to_thermal = float('inf')
-
-        # Calculate sniffing radius for the current thermal field parameters
-        ambient_wt_for_sniff_calc = lambda_strength
-        sniffing_radius_meters_base = calculate_sniffing_radius(ambient_wt_for_sniff_calc, mc_for_sniffing_ms)
-        if sniffing_radius_meters_base <= 0:
-            # If sniffing radius is 0, no intercepts are possible. We can just glide to the end.
-            current_altitude -= search_distance / glide_ratio
-            current_pos = path_end
-            continue
-
-        for thermal in updraft_thermals_info:
-            thermal_center = thermal['center']
-            dist_to_thermal = math.hypot(thermal_center[0] - path_start[0], thermal_center[1] - path_start[1])
-
-            if dist_to_thermal > search_distance:
-                continue
-
-            thermal_bearing_from_start = math.degrees(
-                math.atan2(thermal_center[1] - path_start[1], thermal_center[0] - path_start[0]))
-            if thermal_bearing_from_start < 0:
-                thermal_bearing_from_start += 360
-
-            angle_from_line = thermal_bearing_from_start - bearing_to_end_degrees
-            if angle_from_line > 180:
-                angle_from_line -= 360
-            elif angle_from_line <= -180:
-                angle_from_line += 360
-
-            is_in_arc = abs(angle_from_line) <= arc_half_angle_degrees
-
-            arc_line_upper_end = (path_start[0] + search_distance * math.cos(math.radians(arc_end_angle)),
-                                  path_start[1] + search_distance * math.sin(math.radians(arc_end_angle)))
-            arc_line_lower_end = (path_start[0] + search_distance * math.cos(math.radians(arc_start_angle)),
-                                  path_start[1] + search_distance * math.sin(math.radians(arc_start_angle)))
-
-            dist_to_upper_line, _ = distance_from_point_to_line_segment(thermal_center, path_start, arc_line_upper_end)
-            dist_to_lower_line, _ = distance_from_point_to_line_segment(thermal_center, path_start, arc_line_lower_end)
-
-            is_near_arc_edge = (dist_to_upper_line <= sniffing_radius_meters_base) or (
-                    dist_to_lower_line <= sniffing_radius_meters_base)
-
-            if (is_in_arc or is_near_arc_edge):
-                if dist_to_thermal < min_dist_to_thermal:
-                    min_dist_to_thermal = dist_to_thermal
-                    nearest_thermal = thermal
-
-        if nearest_thermal:
-            # An intercept occurred
-            thermal_center = nearest_thermal['center']
-
-            # Calculate altitude drop
-            altitude_drop = min_dist_to_thermal / glide_ratio
-            current_altitude -= altitude_drop
-            current_pos = thermal_center
-
-            updraft_thermals_info.remove(nearest_thermal)
-
-            if nearest_thermal['updraft_strength'] >= mc_for_sniffing_ms:
-                # Climb and restart glide from this position
-                current_altitude = z_cbl_meters
-                has_intercepted_thermal = True
-        else:
-            # No intercept, glide to the end of the search distance
-            current_altitude -= search_distance / glide_ratio
-            current_pos = path_end
-
-    return has_intercepted_thermal
+    return False
 
 
 # --- Main execution block ---
 if __name__ == '__main__':
     print("Choose an option:")
-    print("1. Generate a single plot (visualize dynamic glider path)")
+    print("1. Generate a single plot (visualize Poisson-distributed thermals with encircling downdrafts)")
     print("2. Run Monte Carlo simulation (compute probability for a single scenario and export CSV)")
 
     choice = input("Enter 1 or 2: ")
 
     if choice == '1':
-        print("\n--- Generating Single Plot with Dynamic Path Simulation ---")
-        random_angle = random.uniform(0, 360)
-        end_point_x = RANDOM_END_POINT_DISTANCE * math.cos(math.radians(random_angle))
-        end_point_y = RANDOM_END_POINT_DISTANCE * math.sin(math.radians(random_angle))
-        random_end_point = (end_point_x, end_point_y)
-        simulate_dynamic_glide_path_and_draw(
+        print("\n--- Generating Single Plot with Poisson Thermals (Updrafts with Encircling Downdrafts) ---")
+        draw_poisson_thermals_and_glide_path_with_intercept_check(
             z_cbl_meters=SCENARIO_Z_CBL,
             glide_ratio=SCENARIO_GLIDE_RATIO,
             mc_for_sniffing_ms=SCENARIO_MC_SNIFF,
             lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
             lambda_strength=SCENARIO_LAMBDA_STRENGTH,
-            end_point=random_end_point
+            glide_path_width_meters=GLIDE_PATH_WIDTH_METERS
         )
+
     elif choice == '2':
-        num_simulations = 100000
+        num_simulations = 1000
+
         print(f"\n--- Running Monte Carlo Simulation for a Single Scenario ({num_simulations} trials) ---")
         print(f"Scenario Parameters:")
         print(f"  Z (CBL Height): {SCENARIO_Z_CBL} m")
         print(f"  Glide Ratio: {SCENARIO_GLIDE_RATIO}:1")
+        print(f"  Glide Path Width: {GLIDE_PATH_WIDTH_METERS / 1000} km")
         print(f"  Pilot MC Sniff: {SCENARIO_MC_SNIFF} m/s")
         print(f"  Thermal Density (Lambda): {SCENARIO_LAMBDA_THERMALS_PER_SQ_KM} thermals/km²")
         print(f"  Thermal Strength Mean (Lambda): {SCENARIO_LAMBDA_STRENGTH} m/s (clamped 1-10 m/s)")
-        print(f"  Search Arc Angle: +/- {SEARCH_ARC_ANGLE_DEGREES / 2}° (Total {SEARCH_ARC_ANGLE_DEGREES}°)")
         print("-" * 50)
 
         intercept_count = 0
         tqdm_desc = "Running Monte Carlo Trials"
         for _ in tqdm(range(num_simulations), desc=tqdm_desc):
-            random_angle = random.uniform(0, 360)
-            end_point_x = RANDOM_END_POINT_DISTANCE * math.cos(math.radians(random_angle))
-            end_point_y = RANDOM_END_POINT_DISTANCE * math.sin(math.radians(random_angle))
-            random_end_point = (end_point_x, end_point_y)
-            if simulate_intercept_experiment_dynamic(
+            if simulate_intercept_experiment_poisson(
                     z_cbl_meters=SCENARIO_Z_CBL,
                     glide_ratio=SCENARIO_GLIDE_RATIO,
                     mc_for_sniffing_ms=SCENARIO_MC_SNIFF,
                     lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
                     lambda_strength=SCENARIO_LAMBDA_STRENGTH,
-                    end_point=random_end_point
+                    glide_path_width_meters=GLIDE_PATH_WIDTH_METERS
             ):
                 intercept_count += 1
 
@@ -508,17 +447,17 @@ if __name__ == '__main__':
         calculated_sniffing_radius = calculate_sniffing_radius(
             SCENARIO_LAMBDA_STRENGTH, SCENARIO_MC_SNIFF
         )
-
-        available_glide_height = SCENARIO_Z_CBL - MIN_SAFE_ALTITUDE
-        initial_glide_path_length = available_glide_height * SCENARIO_GLIDE_RATIO
+        available_glide_height = SCENARIO_Z_CBL - 500
+        current_glide_path_length_meters = available_glide_height * SCENARIO_GLIDE_RATIO
+        reported_glide_path_length = min(current_glide_path_length_meters, MAX_SEARCH_DISTANCE_METERS)
 
         all_results = [{
             'Z (m)': SCENARIO_Z_CBL,
             'Wt_Ambient (m/s)': SCENARIO_LAMBDA_STRENGTH,
             'MC_Sniff (m/s)': SCENARIO_MC_SNIFF,
-            'Sniffing Radius (Base)(m)': calculated_sniffing_radius,
-            'Search Arc Angle (deg)': SEARCH_ARC_ANGLE_DEGREES,
-            'Initial Glide Path Length (m)': initial_glide_path_length,
+            'Sniffing Radius (m)': calculated_sniffing_radius,
+            'Glide Path Length (m)': reported_glide_path_length,
+            'Glide Path Width (m)': GLIDE_PATH_WIDTH_METERS,
             'Thermal Density (per km^2)': SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
             'Thermal Strength Lambda': SCENARIO_LAMBDA_STRENGTH,
             'Probability': probability
@@ -527,26 +466,24 @@ if __name__ == '__main__':
         print("\n" + "=" * 120)
         print("\n--- Monte Carlo Simulation Results for Single Scenario ---")
         headers = [
-            'Z (m)', 'Wt_Ambient (m/s)', 'MC_Sniff (m/s)', 'Sniffing Radius (Base)(m)',
-            'Search Arc Angle (deg)',
-            'Initial Glide Path Length (m)', 'Thermal Density (per km^2)', 'Thermal Strength Lambda',
-            'Probability'
+            'Z (m)', 'Wt_Ambient (m/s)', 'MC_Sniff (m/s)', 'Sniffing Radius (m)',
+            'Glide Path Length (m)', 'Glide Path Width (m)', 'Thermal Density (per km^2)',
+            'Thermal Strength Lambda', 'Probability'
         ]
-
         print(
-            f"{headers[0]:<8} | {headers[1]:<18} | {headers[2]:<15} | {headers[3]:<28} | {headers[4]:<23} |"
-            f"{headers[5]:<23} | {headers[6]:<25} | {headers[7]:<25} | {headers[8]:<15}"
+            f"{headers[0]:<8} | {headers[1]:<18} | {headers[2]:<15} | {headers[3]:<22} | {headers[4]:<23} | "
+            f"{headers[5]:<22} | {headers[6]:<25} | {headers[7]:<25} | {headers[8]:<15}"
         )
-        print("-" * 300)
+        print("-" * 200)
 
         for row in all_results:
             print(
-                f"{row['Z (m)']:<8} | {row['Wt_Ambient (m/s)']:<18.1f} | {row['MC_Sniff (m/s)']:<15.1f} | {row['Sniffing Radius (Base)(m)']:<28.2f} | "
-                f"{row['Search Arc Angle (deg)']:<23.2f} | "
-                f"{row['Initial Glide Path Length (m)']:<23.2f} | {row['Thermal Density (per km^2)']:<25.2f} | {row['Thermal Strength Lambda']:<25.1f} | {row['Probability']:<15.4f}"
+                f"{row['Z (m)']:<8} | {row['Wt_Ambient (m/s)']:<18.1f} | {row['MC_Sniff (m/s)']:<15.1f} | {row['Sniffing Radius (m)']:<22.2f} | "
+                f"{row['Glide Path Length (m)']:<23.2f} | {row['Glide Path Width (m)']:<22.2f} | "
+                f"{row['Thermal Density (per km^2)']:<25.2f} | {row['Thermal Strength Lambda']:<25.1f} | {row['Probability']:<15.4f}"
             )
 
-        csv_filename = "thermal_intercept_simulation_results_poisson_dist_arc_search_dynamic_path.csv"
+        csv_filename = "thermal_intercept_simulation_results_poisson_dist_encircling_with_width.csv"
         try:
             with open(csv_filename, 'w', newline='') as csvfile:
                 fieldnames = headers
@@ -557,5 +494,6 @@ if __name__ == '__main__':
             print(f"\nResults successfully exported to '{csv_filename}'")
         except IOError as e:
             print(f"\nError writing to CSV file '{csv_filename}': {e}")
+
     else:
         print("Invalid choice. Please enter 1 or 2.")
