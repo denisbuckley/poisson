@@ -35,6 +35,9 @@
 #   is highlighted with a unique marker.
 # - Data Output: The output for the single plot mode is now simplified to only
 #   show the distance from the origin and the relative bearing, without redundant labels.
+# - **MODIFIED:** The printout for the Monte Carlo simulation (option 2) has been
+#   updated to remove the 'Sniffing Radius (Base)(m)', 'Initial Glide Path Length (m)',
+#   and 'Wt_Ambient (m/s)' columns, as requested.
 # -----------------------------
 
 import matplotlib.pyplot as plt
@@ -59,8 +62,8 @@ MIN_SAFE_ALTITUDE = 500.0  # Minimum altitude for a safe landing
 # --- Scenario Parameters ---
 SCENARIO_Z_CBL = 2500.0
 SCENARIO_GLIDE_RATIO = 40
-SCENARIO_MC_SNIFF = 7
-SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.05
+SCENARIO_MC_SNIFF = 2
+SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.01
 SCENARIO_LAMBDA_STRENGTH = 3
 SEARCH_ARC_ANGLE_DEGREES = 30.0
 # The maximum search distance is now dynamically calculated, but this serves as a cap for the initial endpoint generation.
@@ -553,7 +556,7 @@ if __name__ == '__main__':
             end_point=random_end_point
         )
     elif choice == '2':
-        num_simulations = 100000
+        num_simulations = 1000
         print(f"\n--- Running Monte Carlo Simulation for a Single Scenario ({num_simulations} trials) ---")
         print(f"Scenario Parameters:")
         print(f"  Z (CBL Height): {SCENARIO_Z_CBL} m")
@@ -583,20 +586,10 @@ if __name__ == '__main__':
 
         probability = successful_flights / num_simulations
 
-        calculated_sniffing_radius = calculate_sniffing_radius(
-            SCENARIO_LAMBDA_STRENGTH, SCENARIO_MC_SNIFF
-        )
-
-        available_glide_height = SCENARIO_Z_CBL - MIN_SAFE_ALTITUDE
-        initial_glide_path_length = available_glide_height * SCENARIO_GLIDE_RATIO
-
         all_results = [{
             'Z (m)': SCENARIO_Z_CBL,
-            'Wt_Ambient (m/s)': SCENARIO_LAMBDA_STRENGTH,
             'MC_Sniff (m/s)': SCENARIO_MC_SNIFF,
-            'Sniffing Radius (Base)(m)': calculated_sniffing_radius,
             'Search Arc Angle (deg)': SEARCH_ARC_ANGLE_DEGREES,
-            'Initial Glide Path Length (m)': initial_glide_path_length,
             'Thermal Density (per km^2)': SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
             'Thermal Strength Lambda': SCENARIO_LAMBDA_STRENGTH,
             'Successful Flights': successful_flights,
@@ -606,24 +599,24 @@ if __name__ == '__main__':
         print("\n" + "=" * 120)
         print("\n--- Monte Carlo Simulation Results for Single Scenario ---")
         headers = [
-            'Z (m)', 'Wt_Ambient (m/s)', 'MC_Sniff (m/s)', 'Sniffing Radius (Base)(m)',
+            'Z (m)', 'MC_Sniff (m/s)',
             'Search Arc Angle (deg)',
-            'Initial Glide Path Length (m)', 'Thermal Density (per km^2)', 'Thermal Strength Lambda',
+            'Thermal Density (per km^2)', 'Thermal Strength Lambda',
             'Successful Flights',
             'Probability'
         ]
 
         print(
-            f"{headers[0]:<8} | {headers[1]:<18} | {headers[2]:<15} | {headers[3]:<28} | {headers[4]:<23} |"
-            f"{headers[5]:<23} | {headers[6]:<25} | {headers[7]:<25} | {headers[8]:<25} | {headers[9]:<15}"
+            f"{headers[0]:<8} | {headers[1]:<15} | {headers[2]:<23} |"
+            f"{headers[3]:<25} | {headers[4]:<25} | {headers[5]:<25} | {headers[6]:<15}"
         )
         print("-" * 300)
 
         for row in all_results:
             print(
-                f"{row['Z (m)']:<8} | {row['Wt_Ambient (m/s)']:<18.1f} | {row['MC_Sniff (m/s)']:<15.1f} | {row['Sniffing Radius (Base)(m)']:<28.2f} | "
+                f"{row['Z (m)']:<8} | {row['MC_Sniff (m/s)']:<15.1f} | "
                 f"{row['Search Arc Angle (deg)']:<23.2f} | "
-                f"{row['Initial Glide Path Length (m)']:<23.2f} | {row['Thermal Density (per km^2)']:<25.2f} | {row['Thermal Strength Lambda']:<25.1f} | "
+                f"{row['Thermal Density (per km^2)']:<25.2f} | {row['Thermal Strength Lambda']:<25.1f} | "
                 f"{row['Successful Flights']:<25} | {row['Probability']:<15.4f}"
             )
 
