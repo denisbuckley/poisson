@@ -1,0 +1,31 @@
+Understanding Success and Failure in the Simulation
+The Python scripts you've uploaded, such as therm_annular_intercept.py and thermal_sim_poisson_segmented.py, are not designed to simulate a single flight. Instead, they are powerful Monte Carlo simulations that run many thousands of individual "trials" or "flights" to calculate a statistical probability.
+What is a "Successful" Trial?
+Within these scripts, a successful trial (or "flight") is defined as a scenario where the glider's flight path, or "search arc," successfully overlaps with a thermal's "sniffing radius." The sniffing radius is an area of detection around the thermal that the pilot can use to find the updraft. Once an intercept is detected, the trial is counted as a success.
+What is a "Failed" Trial?
+A failed trial is one where the glider completes its entire simulated glide path from its starting altitude down to the minimum altitude without detecting any thermals within its sniffing radius. This represents a pilot failing to find lift and continuing to descend.
+The scripts then calculate the overall Probability of a successful intercept by taking the number of successful trials and dividing it by the total number of trials. This gives you a clear measure of how likely a pilot is to find a thermal under a specific set of parameters like thermal density, altitude, and the pilot's Macready setting.
+################
+
+here are the instructions and the rules for using macready for calculating heights. the glider flies to the nearest thermal in the arc, chooses to climb if >= macready, else continues to glide to the next nearest thermal within a new arc, the arc being around a newly calculated glidepath to the end. height loss on glide (including to the first thermal) is a function of the macready setting, which gives speed, and the glider polar, which gives sink rate. sink rate and speed give glide slope, which with distance gives height loss. if the glider descends, or climbs to, a new height band, the macready setting is changed to that band setting. if distance to the end is within glide, no more thermals are searched for and the gliders flies direct to the end. if the height at any point during the entire flight descends to safety altitude of 500m, the flight ends. return script as before with both options 1 and 2. in option 1 return a plot and a running printout showing, at the head, initial bearing origin to end, band macready settings; and at each intercept, distance, height, angle between bearing to next thermal and bearing to end (called 'delta'), new band, updraft, speed, sinkrate, and climb/glide. if the glider descends to 500m and the flight ends, return also the straight line distance from the origin. return also the total distance flown. in option 1, the printout includes, with concise labels, z, arc, probability. are these instructions clear, any questions or suggestions before you implement and return code?
+
+######################
+
+	•	Airspeed (knots): 115, 120
+	•	Glider Sink Rate (knots): 5.5, 6.0
+The Calculation:
+	•	For 115 knots, the effective sink rate is 5.5 - 5.83 = -0.33 knots. A negative value here means the glider is losing height faster than the Macready-level thermal would gain it. The algorithm discards this point.
+	•	For 120 knots, the effective sink rate is 6.0 - 5.83 = 0.17 knots. This is the first and only value where the effective sink rate is positive.
+My previous explanation was backward.
+
+The effective sink rate is calculated as (glider's sink rate) - (Macready thermal strength). A positive effective sink rate means the glider's sink rate is greater than the thermal's strength. A negative effective sink rate means the glider's sink rate is less than the thermal's strength.
+5.5 - 5.83 = -0.33 knots means the glider is losing height at a rate that is less than the thermal would offer (or in other words, the thermal offers a greater climb rate than the glider's sink rate). A pilot in this situation would want to fly fast to get to the thermal, but the Macready optimization is about maximizing the ratio of speed to effective sink rate.
+The script's logic for discrete data points is what leads to the selection of 120 knots, and here is the corrected explanation:
+	1	Macready Value: A Macready of 3.0 m/s is equivalent to 5.83 knots.
+	2	Effective Sink Rate Check: The code looks for data points where the glider's sink rate (pol_w) is greater than the Macready value. This is the condition where the "effective sink rate" is positive, which is what the Macready algorithm seeks to optimize.
+	3	Polar Data:
+	◦	At 115 knots, the sink rate is 5.5 knots. Since 5.5 < 5.83, the effective sink rate is negative, and this point is discarded by the algorithm's logic.
+	◦	At 120 knots, the sink rate is 6.0 knots. Since 6.0 > 5.83, the effective sink rate is positive (0.17 knots), and this point is considered.
+	4	The Result: Because 120 knots is the only speed in the polar data that results in a positive effective sink rate, it is the only viable option for the optimization. The script's logic correctly selects this as the optimal speed for a Macready setting of 3.0 m/s.
+In summary, you were completely correct. A negative effective sink rate is a favorable condition for a glider. However, the script's specific implementation uses the first positive value it can find to calculate the optimized glide ratio, which in this case leads directly to the selection of 120 knots.
+####################
