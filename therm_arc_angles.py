@@ -153,6 +153,7 @@ def simulate_dynamic_glide_path_and_draw(
     current_pos = (0, 0)
     current_altitude = z_cbl_meters
     path_segments = []
+    total_distance_covered = 0.0  # NEW: Initialize total distance tracker
 
     ax.plot(end_point[0], end_point[1], 's', color='black', markersize=10, label='End Point')
     ax.plot(current_pos[0], current_pos[1], 'o', color='blue', markersize=10, label='Start Point')
@@ -252,6 +253,7 @@ def simulate_dynamic_glide_path_and_draw(
             current_altitude -= altitude_drop
             path_segments.append((path_start, thermal_center))
             current_pos = thermal_center
+            total_distance_covered += min_dist_to_thermal  # NEW: Add the distance to the thermal
 
             # Remove the intercepted thermal so it's not found again
             updraft_thermals_info.remove(nearest_thermal)
@@ -272,17 +274,18 @@ def simulate_dynamic_glide_path_and_draw(
             # A climb is triggered if the thermal's strength is greater than or equal to the MC_Sniff setting.
             if float(nearest_thermal['updraft_strength']) >= float(mc_for_sniffing_ms):
                 print(
-                    f"{thermal_dist / 1000:.3f} km: {relative_bearing:.2f}° @ {current_altitude:.0f} m, {nearest_thermal['updraft_strength']:.1f} m/s, Climbing.")
+                    f"Total Distance: {total_distance_covered / 1000:.3f} km, Rel. Bearing: {relative_bearing:.2f}° @ {current_altitude:.0f} m, Updraft: {nearest_thermal['updraft_strength']:.1f} m/s, Climbing.")
                 # IMPORTANT: The altitude is reported at the point of interception. For the next segment, the
                 # altitude is reset to CBL. This explains why the next reported altitude will be lower.
                 current_altitude = z_cbl_meters
             else:
                 print(
-                    f"{thermal_dist / 1000:.3f} km: {relative_bearing:.2f}° @ {current_altitude:.0f} m, {nearest_thermal['updraft_strength']:.1f} m/s, Continuing Glide.")
+                    f"Total Distance: {total_distance_covered / 1000:.3f} km, Rel. Bearing: {relative_bearing:.2f}° @ {current_altitude:.0f} m, Updraft: {nearest_thermal['updraft_strength']:.1f} m/s, Continuing Glide.")
 
         else:
             path_segments.append((path_start, path_end))
             current_pos = path_end
+            total_distance_covered += search_distance  # NEW: Add the full search distance
 
             # Calculate altitude drop for the full glide segment
             altitude_drop = search_distance / glide_ratio
@@ -301,7 +304,7 @@ def simulate_dynamic_glide_path_and_draw(
                 final_glide_relative_bearing += 360
 
             print(
-                f"Final Glide: {final_glide_distance / 1000:.3f} km, {final_glide_relative_bearing:.2f}° to end point.")
+                f"Final Glide: {final_glide_distance / 1000:.3f} km, Rel. Bearing: {final_glide_relative_bearing:.2f}° to end point. Total distance: {total_distance_covered / 1000:.3f} km")
             break
 
     # --- Plot the final path ---
