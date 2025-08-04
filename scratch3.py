@@ -17,6 +17,9 @@
 # - Dynamic Flight Path: The glider's path is no longer a single straight line.
 #   It is an iterative, multi-segment path where the glider "moves" to an intercepted
 #   thermal before continuing its flight towards a final destination.
+# - **MODIFIED:** The script now uses a glider polar to dynamically calculate the
+#   glide ratio and sink rate based on the pilot's Macready setting, removing the
+#   previous fixed glide ratio.
 # - **FIXED:** The Monte Carlo simulation now correctly determines a "successful" flight
 #   by checking if the glider reaches its destination with sufficient altitude.
 # - Climb and Restart Logic: If an intercepted updraft's strength is greater
@@ -59,19 +62,28 @@ K_DOWNDRAFT_STRENGTH = 0.042194
 EPSILON = 1e-9
 MIN_SAFE_ALTITUDE = 500.0  # Minimum altitude for a safe landing
 
+# --- LS10 Glider Polar Data (from thermal_sim_poisson_segmented.py) ---
+# Glider polar data points: airspeed vs sink rate.
+# The `pol_v` is airspeed in knots, `pol_w` is sink rate in knots.
+pol_v = np.array([45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120])
+pol_w = np.array([1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0, 3.4, 3.8, 4.2, 4.6, 5.0, 5.5, 6.0])
+
 # --- Scenario Parameters ---
 SCENARIO_Z_CBL = 2500.0
-SCENARIO_GLIDE_RATIO = 40
-SCENARIO_MC_SNIFF = 2
+# NOTE: SCENARIO_GLIDE_RATIO is no longer a fixed value; it's dynamically calculated.
+SCENARIO_MC_SNIFF = 6
 SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.01
 SCENARIO_LAMBDA_STRENGTH = 3
 SEARCH_ARC_ANGLE_DEGREES = 30.0
-# The maximum search distance is now dynamically calculated, but this serves as a cap for the initial endpoint generation.
 RANDOM_END_POINT_DISTANCE = 100000.0
 
 
-# --- Helper functions (from previous scripts, unchanged) ---
+# --- Helper functions ---
 def calculate_sniffing_radius(Wt_ms_ambient, MC_for_sniffing_ms, thermal_type="NORMAL"):
+    """
+    Calculates the sniffing radius based on ambient thermal strength and pilot's Macready setting.
+    This function remains the same.
+    """
     C_thermal = 0.033 if thermal_type == "NORMAL" else 0.10
     Wt_knots_for_sniff = Wt_ms_ambient / KNOT_TO_MS
     MC_knots_for_sniff = MC_for_sniffing_ms / KNOT_TO_MS
@@ -85,6 +97,10 @@ def calculate_sniffing_radius(Wt_ms_ambient, MC_for_sniffing_ms, thermal_type="N
 
 
 def distance_from_point_to_line_segment(point, line_start, line_end):
+    """
+    Calculates the distance from a point to a line segment.
+    This function remains the same.
+    """
     px, py = point
     x1, y1 = line_start
     x2, y2 = line_end
@@ -103,6 +119,10 @@ def distance_from_point_to_line_segment(point, line_start, line_end):
 
 
 def generate_poisson_updraft_thermals(sim_area_side_meters, lambda_thermals_per_sq_km, lambda_strength):
+    """
+    Generates thermal locations and properties using a Poisson distribution.
+    This function remains the same.
+    """
     sim_area_sq_km = (sim_area_side_meters / 1000) ** 2
     expected_num_thermals = lambda_thermals_per_sq_km * sim_area_sq_km
     num_thermals = np.random.poisson(expected_num_thermals)
@@ -123,12 +143,48 @@ def generate_poisson_updraft_thermals(sim_area_side_meters, lambda_thermals_per_
     return updraft_thermals
 
 
+def calculate_glider_parameters_from_polar(MC_setting_ms):
+    """
+    Calculates the optimum airspeed, sink rate, and glide ratio for a given
+    Macready setting using the glider polar.
+
+    Args:
+        MC_setting_ms (float): The pilot's Macready setting in m/s.
+
+    Returns:
+        tuple: (airspeed_ms, sink_rate_ms, glide_ratio)
+    """
+    MC_setting_knots = MC_setting_ms / KNOT_TO_MS
+
+    # Calculate effective sink rate (pol_w - MC_setting) for each airspeed.
+    effective_sink_rate_knots = pol_w - MC_setting_knots
+
+    # Calculate effective glide ratio (pol_v / effective_sink_rate)
+    effective_glide_ratio = pol_v / effective_sink_rate_knots
+
+    # Find the maximum effective glide ratio, which corresponds to the best speed-to-fly.
+    max_glide_ratio_index = np.argmax(effective_glide_ratio)
+
+    airspeed_knots = pol_v[max_glide_ratio_index]
+    sink_rate_knots = pol_w[max_glide_ratio_index]
+
+    airspeed_ms = airspeed_knots * KNOT_TO_MS
+    sink_rate_ms = sink_rate_knots * KNOT_TO_MS
+    glide_ratio = airspeed_ms / sink_rate_ms
+
+    return airspeed_ms, sink_rate_ms, glide_ratio
+
+
 # --- Main Dynamic Simulation Function for Visualization ---
 def simulate_dynamic_glide_path_and_draw(
-        z_cbl_meters, glide_ratio, mc_for_sniffing_ms,
+        z_cbl_meters, mc_for_sniffing_ms,
         lambda_thermals_per_sq_km, lambda_strength,
         end_point, fig_width=12, fig_height=12
 ):
+    """
+    Simulates a glider's flight and visualizes the path.
+    Now uses dynamic glide ratio and sink rate.
+    """
     fig, ax = plt.subplots(1, figsize=(fig_width, fig_height))
     ax.set_aspect('equal')
 
@@ -173,18 +229,20 @@ def simulate_dynamic_glide_path_and_draw(
     successful_flight = False
 
     while math.hypot(end_point[0] - current_pos[0], end_point[1] - current_pos[1]) > EPSILON:
-        # --- NEW: Check if starting altitude is already too low ---
         if current_altitude <= MIN_SAFE_ALTITUDE:
             print(
                 f"Landing: Altitude dropped below {MIN_SAFE_ALTITUDE} m. Landed at {total_distance_covered / 1000:.3f} km from origin.")
-            # This is the final point of the flight path
             if len(path_segments) > 0:
                 path_segments.append((path_segments[-1][1], current_pos))
             break
 
+        # Dynamically calculate glider parameters based on Macready setting
+        airspeed_ms, sink_rate_ms, glide_ratio = calculate_glider_parameters_from_polar(mc_for_sniffing_ms)
+
         path_start = current_pos
 
         available_glide_height = current_altitude - MIN_SAFE_ALTITUDE
+        # The distance flown to land safely is available height * glide ratio
         segment_length = available_glide_height * glide_ratio
 
         distance_to_end = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
@@ -256,7 +314,8 @@ def simulate_dynamic_glide_path_and_draw(
 
         if nearest_thermal:
             thermal_center = nearest_thermal['center']
-            altitude_drop = min_dist_to_thermal / glide_ratio
+            time_to_thermal = min_dist_to_thermal / airspeed_ms
+            altitude_drop = time_to_thermal * sink_rate_ms
 
             if current_altitude - altitude_drop < MIN_SAFE_ALTITUDE:
                 glide_dist_to_safe_alt = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
@@ -302,7 +361,8 @@ def simulate_dynamic_glide_path_and_draw(
                     f"Total Distance: {total_distance_covered / 1000:.3f} km, Rel. Bearing: {relative_bearing:.2f}° @ {current_altitude:.0f} m, Updraft: {nearest_thermal['updraft_strength']:.1f} m/s, Continuing Glide.")
 
         else:
-            altitude_drop = search_distance / glide_ratio
+            time_to_travel = search_distance / airspeed_ms
+            altitude_drop = time_to_travel * sink_rate_ms
 
             if current_altitude - altitude_drop < MIN_SAFE_ALTITUDE:
                 glide_dist_to_safe_alt = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
@@ -327,7 +387,10 @@ def simulate_dynamic_glide_path_and_draw(
     if current_altitude > MIN_SAFE_ALTITUDE:
         final_glide_distance = math.hypot(end_point[0] - current_pos[0], end_point[1] - current_pos[1])
         current_pos_at_final_glide = current_pos
-        final_glide_altitude_drop = final_glide_distance / glide_ratio
+
+        airspeed_ms, sink_rate_ms, glide_ratio = calculate_glider_parameters_from_polar(mc_for_sniffing_ms)
+        time_to_travel = final_glide_distance / airspeed_ms
+        final_glide_altitude_drop = time_to_travel * sink_rate_ms
 
         if current_altitude - final_glide_altitude_drop < MIN_SAFE_ALTITUDE:
             glide_dist_to_safe_alt = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
@@ -414,23 +477,13 @@ def simulate_dynamic_glide_path_and_draw(
 
 # --- Main Dynamic Simulation Function for Monte Carlo ---
 def simulate_intercept_experiment_dynamic(
-        z_cbl_meters, glide_ratio, mc_for_sniffing_ms,
+        z_cbl_meters, mc_for_sniffing_ms,
         lambda_thermals_per_sq_km, lambda_strength,
         end_point
 ):
     """
     Runs a single, non-visual simulation of a glider's flight.
-
-    Args:
-        z_cbl_meters (float): The cloud base level altitude in meters.
-        glide_ratio (float): The glider's glide ratio.
-        mc_for_sniffing_ms (float): The pilot's Macready setting for sniffing thermals.
-        lambda_thermals_per_sq_km (float): The lambda value for the Poisson distribution of thermal density.
-        lambda_strength (float): The lambda value for the Poisson distribution of thermal strength.
-        end_point (tuple): The (x, y) coordinates of the destination.
-
-    Returns:
-        bool: True if the glider successfully reaches the destination with a safe altitude, False otherwise.
+    Now uses dynamic glide ratio and sink rate.
     """
     plot_padding = 20000.0
     max_coord = max(abs(end_point[0]), abs(end_point[1]))
@@ -447,9 +500,13 @@ def simulate_intercept_experiment_dynamic(
         if current_altitude <= MIN_SAFE_ALTITUDE:
             return False
 
+        # Dynamically calculate glider parameters based on Macready setting
+        airspeed_ms, sink_rate_ms, glide_ratio = calculate_glider_parameters_from_polar(mc_for_sniffing_ms)
+
         path_start = current_pos
 
         available_glide_height = current_altitude - MIN_SAFE_ALTITUDE
+        # The distance flown to land safely is available height * glide ratio
         segment_length = available_glide_height * glide_ratio
 
         distance_to_end = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
@@ -515,7 +572,8 @@ def simulate_intercept_experiment_dynamic(
 
         if nearest_thermal:
             thermal_center = nearest_thermal['center']
-            altitude_drop = min_dist_to_thermal / glide_ratio
+            time_to_thermal = min_dist_to_thermal / airspeed_ms
+            altitude_drop = time_to_thermal * sink_rate_ms
             if current_altitude - altitude_drop < MIN_SAFE_ALTITUDE:
                 return False
             current_altitude -= altitude_drop
@@ -524,7 +582,8 @@ def simulate_intercept_experiment_dynamic(
             if float(nearest_thermal['updraft_strength']) >= float(mc_for_sniffing_ms):
                 current_altitude = z_cbl_meters
         else:
-            altitude_drop = search_distance / glide_ratio
+            time_to_travel = search_distance / airspeed_ms
+            altitude_drop = time_to_travel * sink_rate_ms
             if current_altitude - altitude_drop < MIN_SAFE_ALTITUDE:
                 return False
             current_altitude -= altitude_drop
@@ -549,19 +608,22 @@ if __name__ == '__main__':
         random_end_point = (end_point_x, end_point_y)
         simulate_dynamic_glide_path_and_draw(
             z_cbl_meters=SCENARIO_Z_CBL,
-            glide_ratio=SCENARIO_GLIDE_RATIO,
             mc_for_sniffing_ms=SCENARIO_MC_SNIFF,
             lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
             lambda_strength=SCENARIO_LAMBDA_STRENGTH,
             end_point=random_end_point
         )
     elif choice == '2':
-        num_simulations = 1000
+        num_simulations = 100000
+        # Calculate dynamic parameters once for the summary printout
+        airspeed, sink_rate, glide_ratio = calculate_glider_parameters_from_polar(SCENARIO_MC_SNIFF)
         print(f"\n--- Running Monte Carlo Simulation for a Single Scenario ({num_simulations} trials) ---")
         print(f"Scenario Parameters:")
         print(f"  Z (CBL Height): {SCENARIO_Z_CBL} m")
-        print(f"  Glide Ratio: {SCENARIO_GLIDE_RATIO}:1")
         print(f"  Pilot MC Sniff: {SCENARIO_MC_SNIFF} m/s")
+        print(f"  Calculated Glide Ratio: {glide_ratio:.2f}:1")
+        print(f"  Calculated Airspeed: {airspeed:.2f} m/s")
+        print(f"  Calculated Sink Rate: {sink_rate:.2f} m/s")
         print(f"  Thermal Density (Lambda): {SCENARIO_LAMBDA_THERMALS_PER_SQ_KM} thermals/km²")
         print(f"  Thermal Strength Mean (Lambda): {SCENARIO_LAMBDA_STRENGTH} m/s (clamped 1-10 m/s)")
         print(f"  Search Arc Angle: +/- {SEARCH_ARC_ANGLE_DEGREES / 2}° (Total {SEARCH_ARC_ANGLE_DEGREES}°)")
@@ -576,7 +638,6 @@ if __name__ == '__main__':
             random_end_point = (end_point_x, end_point_y)
             if simulate_intercept_experiment_dynamic(
                     z_cbl_meters=SCENARIO_Z_CBL,
-                    glide_ratio=SCENARIO_GLIDE_RATIO,
                     mc_for_sniffing_ms=SCENARIO_MC_SNIFF,
                     lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
                     lambda_strength=SCENARIO_LAMBDA_STRENGTH,
@@ -589,6 +650,9 @@ if __name__ == '__main__':
         all_results = [{
             'Z (m)': SCENARIO_Z_CBL,
             'MC_Sniff (m/s)': SCENARIO_MC_SNIFF,
+            'Calc. Glide Ratio': glide_ratio,
+            'Calc. Airspeed (m/s)': airspeed,
+            'Calc. Sink Rate (m/s)': sink_rate,
             'Search Arc Angle (deg)': SEARCH_ARC_ANGLE_DEGREES,
             'Thermal Density (per km^2)': SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
             'Thermal Strength Lambda': SCENARIO_LAMBDA_STRENGTH,
@@ -599,22 +663,23 @@ if __name__ == '__main__':
         print("\n" + "=" * 120)
         print("\n--- Monte Carlo Simulation Results for Single Scenario ---")
         headers = [
-            'Z (m)', 'MC_Sniff (m/s)',
-            'Search Arc Angle (deg)',
+            'Z (m)', 'MC_Sniff (m/s)', 'Calc. Glide Ratio', 'Calc. Airspeed (m/s)',
+            'Calc. Sink Rate (m/s)', 'Search Arc Angle (deg)',
             'Thermal Density (per km^2)', 'Thermal Strength Lambda',
-            'Successful Flights',
-            'Probability'
+            'Successful Flights', 'Probability'
         ]
 
         print(
-            f"{headers[0]:<8} | {headers[1]:<15} | {headers[2]:<23} |"
-            f"{headers[3]:<25} | {headers[4]:<25} | {headers[5]:<25} | {headers[6]:<15}"
+            f"{headers[0]:<8} | {headers[1]:<15} | {headers[2]:<20} | {headers[3]:<23} | {headers[4]:<23} |"
+            f"{headers[5]:<23} | {headers[6]:<25} | {headers[7]:<25} |"
+            f"{headers[8]:<25} | {headers[9]:<15}"
         )
         print("-" * 300)
 
         for row in all_results:
             print(
-                f"{row['Z (m)']:<8} | {row['MC_Sniff (m/s)']:<15.1f} | "
+                f"{row['Z (m)']:<8} | {row['MC_Sniff (m/s)']:<15.1f} | {row['Calc. Glide Ratio']:<20.2f} | "
+                f"{row['Calc. Airspeed (m/s)']:<23.2f} | {row['Calc. Sink Rate (m/s)']:<23.2f} |"
                 f"{row['Search Arc Angle (deg)']:<23.2f} | "
                 f"{row['Thermal Density (per km^2)']:<25.2f} | {row['Thermal Strength Lambda']:<25.1f} | "
                 f"{row['Successful Flights']:<25} | {row['Probability']:<15.4f}"
