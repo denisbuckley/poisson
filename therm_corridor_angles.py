@@ -551,7 +551,7 @@ if __name__ == '__main__':
         )
 
     elif choice == '2':
-        num_simulations = 100000 # Number of trials for the Monte Carlo simulation
+        num_simulations = 1000 # Number of trials for the Monte Carlo simulation
 
         print(f"\n--- Running Monte Carlo Simulation for a Single Scenario ({num_simulations} trials) ---")
         print(f"Scenario Parameters:")
