@@ -56,8 +56,8 @@ pol_w = np.array([1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0, 3.4, 3.8, 4.2, 4.
 
 # --- Scenario Parameters ---
 SCENARIO_Z_CBL = 2500.0
-SCENARIO_MC_SNIFF_BAND1 = 4.0  # User-defined MC setting for the top band
-SCENARIO_MC_SNIFF_BAND2 = 2.0  # User-defined MC setting for the middle band
+SCENARIO_MC_SNIFF_BAND1 = 3.0  # User-defined MC setting for the top band
+SCENARIO_MC_SNIFF_BAND2 = 1.0  # User-defined MC setting for the middle band
 # Altitude boundary for the middle band - now calculated as (2/3) * CBL
 SCENARIO_MIN_ALT_BAND2 = (SCENARIO_Z_CBL / 3) * 2
 # Altitude boundary for the lowest band - now calculated as (1/3) * CBL
@@ -315,7 +315,7 @@ def simulate_dynamic_glide_path_and_draw(
         arc_line_upper_end = (path_start[0] + segment_length * math.cos(math.radians(arc_end_angle)),
                               path_start[1] + segment_length * math.sin(math.radians(arc_end_angle)))
         arc_line_lower_end = (path_start[0] + segment_length * math.cos(math.radians(arc_start_angle)),
-                              path_start[1] + segment_length * math.sin(math.radians(arc_start_angle)))
+                              path_start[1] + segment_length * math.sin(math.radians(arc_end_angle)))
 
         ax.plot([path_start[0], arc_line_upper_end[0]], [path_start[1], arc_line_upper_end[1]],
                 'g--', linewidth=0.5, alpha=0.7, label='Search Arc' if len(path_segments) == 0 else '')
@@ -606,35 +606,35 @@ if __name__ == '__main__':
             'Probability': probability
         }]
 
-        print("\n" + "=" * 100)
+        print("\n" + "=" * 110)
         print("--- Monte Carlo Simulation Results for Single Scenario ---")
         print(f"Z: {SCENARIO_Z_CBL:<8} | Arc: {SEARCH_ARC_ANGLE_DEGREES:<8.1f} | Prob: {probability:<8.4f}")
-        print("-" * 100)
+        print("-" * 110)
 
         print("\nPerformance Parameters per Band:")
-        print("-" * 100)
+        print("-" * 110)
 
-        # Headers for the band-specific performance table
-        band_headers = ['Band', 'MC (m/s)', 'Airspeed (knots)', 'Sink Rate (m/s)', 'Glide Ratio']
+        # Headers for the band-specific performance table, including upper height
+        band_headers = ['Band', 'Upper Height (m)', 'MC (m/s)', 'Airspeed (knots)', 'Sink Rate (m/s)', 'Glide Ratio']
         print(
-            f"{band_headers[0]:<10} | {band_headers[1]:<12} | {band_headers[2]:<17} | {band_headers[3]:<17} | {band_headers[4]:<15}")
-        print("-" * 100)
+            f"{band_headers[0]:<10} | {band_headers[1]:<18} | {band_headers[2]:<12} | {band_headers[3]:<17} | {band_headers[4]:<17} | {band_headers[5]:<15}")
+        print("-" * 110)
 
         # Print data for each band
         row = all_results[0]
         print(
-            f"{'Band 1':<10} | {SCENARIO_MC_SNIFF_BAND1:<12.1f} | {row['Calc. Airspeed (B1) (knots)']:<17.1f} | {row['Calc. Sink Rate (B1) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B1)']:<15.2f}")
+            f"{'Band 1':<10} | {SCENARIO_Z_CBL:<18.0f} | {SCENARIO_MC_SNIFF_BAND1:<12.1f} | {row['Calc. Airspeed (B1) (knots)']:<17.1f} | {row['Calc. Sink Rate (B1) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B1)']:<15.2f}")
         print(
-            f"{'Band 2':<10} | {SCENARIO_MC_SNIFF_BAND2:<12.1f} | {row['Calc. Airspeed (B2) (knots)']:<17.1f} | {row['Calc. Sink Rate (B2) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B2)']:<15.2f}")
+            f"{'Band 2':<10} | {SCENARIO_MIN_ALT_BAND2:<18.0f} | {SCENARIO_MC_SNIFF_BAND2:<12.1f} | {row['Calc. Airspeed (B2) (knots)']:<17.1f} | {row['Calc. Sink Rate (B2) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B2)']:<15.2f}")
         print(
-            f"{'Band 3':<10} | {0.0:<12.1f} | {row['Calc. Airspeed (B3) (knots)']:<17.1f} | {row['Calc. Sink Rate (B3) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B3)']:<15.2f}")
+            f"{'Band 3':<10} | {SCENARIO_MIN_ALT_BAND3:<18.0f} | {0.0:<12.1f} | {row['Calc. Airspeed (B3) (knots)']:<17.1f} | {row['Calc. Sink Rate (B3) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B3)']:<15.2f}")
 
         print("\nSimulation Parameters & Results:")
-        print("-" * 100)
+        print("-" * 110)
         print(f"{'Thermal Density (per km^2)':<27} | {SCENARIO_LAMBDA_THERMALS_PER_SQ_KM:<25.2f}")
         print(f"{'Thermal Strength Lambda':<27} | {SCENARIO_LAMBDA_STRENGTH:<25.1f}")
         print(f"{'Successful Flights':<27} | {successful_flights:<25}")
-        print("-" * 100)
+        print("-" * 110)
 
         csv_filename = "thermal_intercept_simulation_results_poisson_dist_arc_search_dynamic_path_corrected.csv"
         try:
