@@ -17,7 +17,9 @@
 # - Dynamic Flight Path: The glider's path is no longer a single straight line.
 #   It is an iterative, multi-segment path where the glider "moves" to an intercepted
 #   thermal before continuing its flight towards a final destination.
-# - **NEW:** Climb and Restart Logic: If an intercepted updraft's strength is greater
+# - **FIXED:** The Monte Carlo simulation now correctly determines a "successful" flight
+#   by checking if the glider reaches its destination with sufficient altitude.
+# - Climb and Restart Logic: If an intercepted updraft's strength is greater
 #   than or equal to the current MC_Sniff setting, the glider instantaneously
 #   "clumbs" back to CBL height and "restarts" its glide from that horizontal position.
 # - Interception Logic: A thermal is considered a potential intercept if its center is within the
@@ -32,9 +34,6 @@
 #   is highlighted with a unique marker.
 # - Data Output: The output for the single plot mode is now simplified to only
 #   show the distance from the origin and the relative bearing, without redundant labels.
-# - Modularity: The script is designed with a clear separation of concerns,
-#   using functions for thermal generation, intersection checks, and visualization,
-#   making it easy to understand and modify parameters.
 # -----------------------------
 
 import matplotlib.pyplot as plt
@@ -59,8 +58,8 @@ MIN_SAFE_ALTITUDE = 500.0  # Minimum altitude for a safe landing
 # --- Scenario Parameters ---
 SCENARIO_Z_CBL = 2500.0
 SCENARIO_GLIDE_RATIO = 40
-SCENARIO_MC_SNIFF = 4
-SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.051
+SCENARIO_MC_SNIFF = 5
+SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.05
 SCENARIO_LAMBDA_STRENGTH = 3
 SEARCH_ARC_ANGLE_DEGREES = 30.0
 # The maximum search distance is now dynamically calculated, but this serves as a cap for the initial endpoint generation.
@@ -138,6 +137,9 @@ def simulate_dynamic_glide_path_and_draw(
         sim_area_side_meters, lambda_thermals_per_sq_km, lambda_strength
     )
 
+    # Track the original set of thermals to highlight the ones that were intercepted
+    original_thermals = list(updraft_thermals_info)
+
     for thermal_info in updraft_thermals_info:
         updraft_center = thermal_info['center']
         updraft_radius = thermal_info['updraft_radius']
@@ -153,6 +155,7 @@ def simulate_dynamic_glide_path_and_draw(
     current_pos = (0, 0)
     current_altitude = z_cbl_meters
     path_segments = []
+    total_distance_covered = 0.0
 
     ax.plot(end_point[0], end_point[1], 's', color='black', markersize=10, label='End Point')
     ax.plot(current_pos[0], current_pos[1], 'o', color='blue', markersize=10, label='Start Point')
@@ -252,6 +255,7 @@ def simulate_dynamic_glide_path_and_draw(
             current_altitude -= altitude_drop
             path_segments.append((path_start, thermal_center))
             current_pos = thermal_center
+            total_distance_covered += min_dist_to_thermal
 
             # Remove the intercepted thermal so it's not found again
             updraft_thermals_info.remove(nearest_thermal)
@@ -272,37 +276,49 @@ def simulate_dynamic_glide_path_and_draw(
             # A climb is triggered if the thermal's strength is greater than or equal to the MC_Sniff setting.
             if float(nearest_thermal['updraft_strength']) >= float(mc_for_sniffing_ms):
                 print(
-                    f"{thermal_dist / 1000:.3f} km: {relative_bearing:.2f}° @ {current_altitude:.0f} m, {nearest_thermal['updraft_strength']:.1f} m/s, Climbing.")
+                    f"Total Distance: {total_distance_covered / 1000:.3f} km, Rel. Bearing: {relative_bearing:.2f}° @ {current_altitude:.0f} m, Updraft: {nearest_thermal['updraft_strength']:.1f} m/s, Climbing.")
                 # IMPORTANT: The altitude is reported at the point of interception. For the next segment, the
                 # altitude is reset to CBL. This explains why the next reported altitude will be lower.
                 current_altitude = z_cbl_meters
             else:
                 print(
-                    f"{thermal_dist / 1000:.3f} km: {relative_bearing:.2f}° @ {current_altitude:.0f} m, {nearest_thermal['updraft_strength']:.1f} m/s, Continuing Glide.")
+                    f"Total Distance: {total_distance_covered / 1000:.3f} km, Rel. Bearing: {relative_bearing:.2f}° @ {current_altitude:.0f} m, Updraft: {nearest_thermal['updraft_strength']:.1f} m/s, Continuing Glide.")
 
         else:
             path_segments.append((path_start, path_end))
             current_pos = path_end
+            total_distance_covered += search_distance
 
             # Calculate altitude drop for the full glide segment
             altitude_drop = search_distance / glide_ratio
             current_altitude -= altitude_drop
+            # Removed the `break` from here to allow the glider to continue to the end point
 
-            # Final glide to end point
-            final_glide_distance = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
-            final_glide_bearing = math.degrees(math.atan2(end_point[1] - path_start[1], end_point[0] - path_start[0]))
-            if final_glide_bearing < 0:
-                final_glide_bearing += 360
+    # Final glide to end point
+    final_glide_distance = math.hypot(end_point[0] - current_pos[0], end_point[1] - current_pos[1])
+    current_pos_at_final_glide = current_pos
+    current_altitude_at_final_glide = current_altitude
+    final_glide_altitude_drop = final_glide_distance / glide_ratio
+    current_altitude -= final_glide_altitude_drop
+    current_pos = end_point
 
-            final_glide_relative_bearing = final_glide_bearing - bearing_to_end_initial
-            if final_glide_relative_bearing > 180:
-                final_glide_relative_bearing -= 360
-            elif final_glide_relative_bearing <= -180:
-                final_glide_relative_bearing += 360
+    # Update path segments with the final glide
+    path_segments.append((current_pos_at_final_glide, current_pos))
+    total_distance_covered += final_glide_distance
 
-            print(
-                f"Final Glide: {final_glide_distance / 1000:.3f} km, {final_glide_relative_bearing:.2f}° to end point.")
-            break
+    final_glide_bearing = math.degrees(
+        math.atan2(end_point[1] - current_pos_at_final_glide[1], end_point[0] - current_pos_at_final_glide[0]))
+    if final_glide_bearing < 0:
+        final_glide_bearing += 360
+
+    final_glide_relative_bearing = final_glide_bearing - bearing_to_end_initial
+    if final_glide_relative_bearing > 180:
+        final_glide_relative_bearing -= 360
+    elif final_glide_relative_bearing <= -180:
+        final_glide_relative_bearing += 360
+
+    print(
+        f"Final Glide: {final_glide_distance / 1000:.3f} km, Rel. Bearing: {final_glide_relative_bearing:.2f}° to end point. Total distance: {total_distance_covered / 1000:.3f} km")
 
     # --- Plot the final path ---
     path_coords_x = []
@@ -324,8 +340,8 @@ def simulate_dynamic_glide_path_and_draw(
     ax.plot(path_coords_x, path_coords_y, color='blue', linewidth=2, label='Glider Path')
     ax.plot([], [], 'x', color='red', markersize=8, markeredgecolor='black', linewidth=1, label='Intercepted Thermal')
 
-    all_x = path_coords_x + [t['center'][0] for t in updraft_thermals_info]
-    all_y = path_coords_y + [t['center'][1] for t in updraft_thermals_info]
+    all_x = path_coords_x + [t['center'][0] for t in original_thermals]
+    all_y = path_coords_y + [t['center'][1] for t in original_thermals]
 
     min_x, max_x = min(all_x), max(all_x)
     min_y, max_y = min(all_y), max(all_y)
@@ -341,6 +357,8 @@ def simulate_dynamic_glide_path_and_draw(
     ax.legend()
     plt.show()
 
+    return current_altitude > MIN_SAFE_ALTITUDE
+
 
 # --- Main Dynamic Simulation Function for Monte Carlo ---
 def simulate_intercept_experiment_dynamic(
@@ -348,6 +366,20 @@ def simulate_intercept_experiment_dynamic(
         lambda_thermals_per_sq_km, lambda_strength,
         end_point
 ):
+    """
+    Runs a single, non-visual simulation of a glider's flight.
+
+    Args:
+        z_cbl_meters (float): The cloud base level altitude in meters.
+        glide_ratio (float): The glider's glide ratio.
+        mc_for_sniffing_ms (float): The pilot's Macready setting for sniffing thermals.
+        lambda_thermals_per_sq_km (float): The lambda value for the Poisson distribution of thermal density.
+        lambda_strength (float): The lambda value for the Poisson distribution of thermal strength.
+        end_point (tuple): The (x, y) coordinates of the destination.
+
+    Returns:
+        bool: True if the glider successfully reaches the destination with a safe altitude, False otherwise.
+    """
     # The simulation area must be large enough to contain the entire flight path
     plot_padding = 20000.0  # 20 km
     max_coord = max(abs(end_point[0]), abs(end_point[1]))
@@ -359,7 +391,6 @@ def simulate_intercept_experiment_dynamic(
 
     current_pos = (0, 0)
     current_altitude = z_cbl_meters
-    has_intercepted_thermal = False
 
     while math.hypot(end_point[0] - current_pos[0],
                      end_point[1] - current_pos[1]) > EPSILON and current_altitude > MIN_SAFE_ALTITUDE:
@@ -379,6 +410,10 @@ def simulate_intercept_experiment_dynamic(
             bearing_to_end_degrees += 360
 
         arc_half_angle_degrees = SEARCH_ARC_ANGLE_DEGREES / 2
+        # FIX: Define arc_start_angle and arc_end_angle here
+        arc_start_angle = bearing_to_end_degrees - arc_half_angle_degrees
+        arc_end_angle = bearing_to_end_degrees + arc_half_angle_degrees
+
         search_distance = min(distance_to_end, segment_length)
 
         path_end = (path_start[0] + search_distance * math.cos(bearing_to_end_radians),
@@ -390,11 +425,14 @@ def simulate_intercept_experiment_dynamic(
         # Calculate sniffing radius for the current thermal field parameters
         ambient_wt_for_sniff_calc = lambda_strength
         sniffing_radius_meters_base = calculate_sniffing_radius(ambient_wt_for_sniff_calc, mc_for_sniffing_ms)
-        if sniffing_radius_meters_base <= 0:
-            # If sniffing radius is 0, no intercepts are possible. We can just glide to the end.
-            current_altitude -= search_distance / glide_ratio
-            current_pos = path_end
-            continue
+        # --- FIX START ---
+        # The special-case "continue" for a zero sniffing radius was flawed.
+        # Removing this block allows the main loop to handle it correctly.
+        # if sniffing_radius_meters_base <= 0:
+        #     current_altitude -= search_distance / glide_ratio
+        #     current_pos = path_end
+        #     continue
+        # --- FIX END ---
 
         for thermal in updraft_thermals_info:
             thermal_center = thermal['center']
@@ -446,13 +484,13 @@ def simulate_intercept_experiment_dynamic(
             if float(nearest_thermal['updraft_strength']) >= float(mc_for_sniffing_ms):
                 # Climb and restart glide from this position
                 current_altitude = z_cbl_meters
-                has_intercepted_thermal = True
         else:
             # No intercept, glide to the end of the search distance
             current_altitude -= search_distance / glide_ratio
             current_pos = path_end
 
-    return has_intercepted_thermal
+    # Return True if the glider reached the end point with a safe altitude, False otherwise.
+    return current_altitude > MIN_SAFE_ALTITUDE
 
 
 # --- Main execution block ---
@@ -478,7 +516,7 @@ if __name__ == '__main__':
             end_point=random_end_point
         )
     elif choice == '2':
-        num_simulations = 100000
+        num_simulations = 1000
         print(f"\n--- Running Monte Carlo Simulation for a Single Scenario ({num_simulations} trials) ---")
         print(f"Scenario Parameters:")
         print(f"  Z (CBL Height): {SCENARIO_Z_CBL} m")
@@ -489,7 +527,7 @@ if __name__ == '__main__':
         print(f"  Search Arc Angle: +/- {SEARCH_ARC_ANGLE_DEGREES / 2}° (Total {SEARCH_ARC_ANGLE_DEGREES}°)")
         print("-" * 50)
 
-        intercept_count = 0
+        successful_flights = 0
         tqdm_desc = "Running Monte Carlo Trials"
         for _ in tqdm(range(num_simulations), desc=tqdm_desc):
             random_angle = random.uniform(0, 360)
@@ -504,9 +542,9 @@ if __name__ == '__main__':
                     lambda_strength=SCENARIO_LAMBDA_STRENGTH,
                     end_point=random_end_point
             ):
-                intercept_count += 1
+                successful_flights += 1
 
-        probability = intercept_count / num_simulations
+        probability = successful_flights / num_simulations
 
         calculated_sniffing_radius = calculate_sniffing_radius(
             SCENARIO_LAMBDA_STRENGTH, SCENARIO_MC_SNIFF
@@ -524,6 +562,7 @@ if __name__ == '__main__':
             'Initial Glide Path Length (m)': initial_glide_path_length,
             'Thermal Density (per km^2)': SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
             'Thermal Strength Lambda': SCENARIO_LAMBDA_STRENGTH,
+            'Successful Flights': successful_flights,
             'Probability': probability
         }]
 
@@ -533,12 +572,13 @@ if __name__ == '__main__':
             'Z (m)', 'Wt_Ambient (m/s)', 'MC_Sniff (m/s)', 'Sniffing Radius (Base)(m)',
             'Search Arc Angle (deg)',
             'Initial Glide Path Length (m)', 'Thermal Density (per km^2)', 'Thermal Strength Lambda',
+            'Successful Flights',
             'Probability'
         ]
 
         print(
             f"{headers[0]:<8} | {headers[1]:<18} | {headers[2]:<15} | {headers[3]:<28} | {headers[4]:<23} |"
-            f"{headers[5]:<23} | {headers[6]:<25} | {headers[7]:<25} | {headers[8]:<15}"
+            f"{headers[5]:<23} | {headers[6]:<25} | {headers[7]:<25} | {headers[8]:<25} | {headers[9]:<15}"
         )
         print("-" * 300)
 
@@ -546,7 +586,8 @@ if __name__ == '__main__':
             print(
                 f"{row['Z (m)']:<8} | {row['Wt_Ambient (m/s)']:<18.1f} | {row['MC_Sniff (m/s)']:<15.1f} | {row['Sniffing Radius (Base)(m)']:<28.2f} | "
                 f"{row['Search Arc Angle (deg)']:<23.2f} | "
-                f"{row['Initial Glide Path Length (m)']:<23.2f} | {row['Thermal Density (per km^2)']:<25.2f} | {row['Thermal Strength Lambda']:<25.1f} | {row['Probability']:<15.4f}"
+                f"{row['Initial Glide Path Length (m)']:<23.2f} | {row['Thermal Density (per km^2)']:<25.2f} | {row['Thermal Strength Lambda']:<25.1f} | "
+                f"{row['Successful Flights']:<25} | {row['Probability']:<15.4f}"
             )
 
         csv_filename = "thermal_intercept_simulation_results_poisson_dist_arc_search_dynamic_path.csv"
