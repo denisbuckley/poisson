@@ -62,7 +62,7 @@ SCENARIO_MC_SNIFF_BAND2 = 2.0  # User-defined MC setting for the middle band
 SCENARIO_MIN_ALT_BAND2 = (SCENARIO_Z_CBL / 3) * 2
 # Altitude boundary for the lowest band - now calculated as (1/3) * CBL
 SCENARIO_MIN_ALT_BAND3 = SCENARIO_Z_CBL / 3
-SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.1
+SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.01
 SCENARIO_LAMBDA_STRENGTH = 3
 SEARCH_ARC_ANGLE_DEGREES = 30.0
 RANDOM_END_POINT_DISTANCE = 100000.0
@@ -137,32 +137,17 @@ def get_glider_parameters(mc_setting_ms):
     """
     Calculates the optimum airspeed, sink rate, and glide ratio for a given
     Macready setting using the glider polar.
-
-    This function now correctly handles cases where the Macready setting is
-    greater than the maximum sink rate in the polar, which means the effective
-    glide ratio is always negative. In this situation, the glider's optimal
-    strategy is to fly at its maximum speed.
     """
     mc_setting_knots = mc_setting_ms / KNOT_TO_MS
     effective_sink_rate_knots = pol_w - mc_setting_knots
-
-    # Find the indices where the effective sink rate is positive
     positive_indices = np.where(effective_sink_rate_knots > 0)[0]
 
     if len(positive_indices) == 0:
-        # If no positive effective sink rates, the glider should fly at its fastest speed
-        # to get to the destination as quickly as possible.
-        # This is the Vne (Never Exceed speed) as per the user's glider performance envelope.
         max_glide_ratio_index = len(pol_v) - 1
     else:
-        # Filter the polar data to only include speeds with a positive effective glide ratio
         relevant_pol_v = pol_v[positive_indices]
         relevant_effective_sink_rate = effective_sink_rate_knots[positive_indices]
-
-        # Recalculate effective glide ratio using only the relevant data
         effective_glide_ratio = relevant_pol_v / relevant_effective_sink_rate
-
-        # Find the index of the best effective glide ratio
         max_glide_ratio_relative_index = np.argmax(effective_glide_ratio)
         max_glide_ratio_index = positive_indices[max_glide_ratio_relative_index]
 
@@ -172,7 +157,6 @@ def get_glider_parameters(mc_setting_ms):
     airspeed_ms = airspeed_knots * KNOT_TO_MS
     sink_rate_ms = sink_rate_knots * KNOT_TO_MS
 
-    # Avoid division by zero for the glide ratio calculation
     if sink_rate_ms > 0:
         glide_ratio = airspeed_ms / sink_rate_ms
     else:
@@ -577,7 +561,7 @@ if __name__ == '__main__':
             end_point=random_end_point
         )
     elif choice == '2':
-        num_simulations = 100000
+        num_simulations = 1000
         print(f"\n--- Running Monte Carlo Simulation for a Single Scenario ({num_simulations} trials) ---")
 
         successful_flights = 0
@@ -622,38 +606,35 @@ if __name__ == '__main__':
             'Probability': probability
         }]
 
-        print("\n" + "=" * 180)
+        print("\n" + "=" * 100)
         print("--- Monte Carlo Simulation Results for Single Scenario ---")
-        print(f"Z: {SCENARIO_Z_CBL:<10} Arc: {SEARCH_ARC_ANGLE_DEGREES:<10.1f} Prob: {probability:<10.4f}")
-        print("-" * 180)
+        print(f"Z: {SCENARIO_Z_CBL:<8} | Arc: {SEARCH_ARC_ANGLE_DEGREES:<8.1f} | Prob: {probability:<8.4f}")
+        print("-" * 100)
 
-        headers_to_print = [
-            'Z (m)', 'Glide Ratio (B1)', 'Glide Ratio (B2)', 'Glide Ratio (B3)',
-            'Airspeed (B1) (knots)', 'Airspeed (B2) (knots)', 'Airspeed (B3) (knots)',
-            'Sink Rate (B1) (m/s)', 'Sink Rate (B2) (m/s)', 'Sink Rate (B3) (m/s)',
-            'Search Arc Angle (deg)',
-            'Thermal Density (per km^2)', 'Thermal Strength Lambda',
-            'Successful Flights', 'Probability'
-        ]
+        print("\nPerformance Parameters per Band:")
+        print("-" * 100)
 
-        # Use f-strings with fixed widths for aligned output
+        # Headers for the band-specific performance table
+        band_headers = ['Band', 'MC (m/s)', 'Airspeed (knots)', 'Sink Rate (m/s)', 'Glide Ratio']
         print(
-            f"{headers_to_print[0]:<8} | {headers_to_print[1]:<15} | {headers_to_print[2]:<15} | {headers_to_print[3]:<15} | "
-            f"{headers_to_print[4]:<20} | {headers_to_print[5]:<20} | {headers_to_print[6]:<20} | "
-            f"{headers_to_print[7]:<17} | {headers_to_print[8]:<17} | {headers_to_print[9]:<17} | "
-            f"{headers_to_print[10]:<23} | {headers_to_print[11]:<25} | {headers_to_print[12]:<25} | "
-            f"{headers_to_print[13]:<25} | {headers_to_print[14]:<15}"
-        )
-        print("-" * 350)
+            f"{band_headers[0]:<10} | {band_headers[1]:<12} | {band_headers[2]:<17} | {band_headers[3]:<17} | {band_headers[4]:<15}")
+        print("-" * 100)
 
-        for row in all_results:
-            print(
-                f"{row['Z (m)']:<8} | {row['Calc. Glide Ratio (B1)']:<15.2f} | {row['Calc. Glide Ratio (B2)']:<15.2f} | {row['Calc. Glide Ratio (B3)']:<15.2f} | "
-                f"{row['Calc. Airspeed (B1) (knots)']:<20.1f} | {row['Calc. Airspeed (B2) (knots)']:<20.1f} | {row['Calc. Airspeed (B3) (knots)']:<20.1f} | "
-                f"{row['Calc. Sink Rate (B1) (m/s)']:<17.2f} | {row['Calc. Sink Rate (B2) (m/s)']:<17.2f} | {row['Calc. Sink Rate (B3) (m/s)']:<17.2f} | "
-                f"{row['Search Arc Angle (deg)']:<23.2f} | {row['Thermal Density (per km^2)']:<25.2f} | {row['Thermal Strength Lambda']:<25.1f} | "
-                f"{row['Successful Flights']:<25} | {row['Probability']:<15.4f}"
-            )
+        # Print data for each band
+        row = all_results[0]
+        print(
+            f"{'Band 1':<10} | {SCENARIO_MC_SNIFF_BAND1:<12.1f} | {row['Calc. Airspeed (B1) (knots)']:<17.1f} | {row['Calc. Sink Rate (B1) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B1)']:<15.2f}")
+        print(
+            f"{'Band 2':<10} | {SCENARIO_MC_SNIFF_BAND2:<12.1f} | {row['Calc. Airspeed (B2) (knots)']:<17.1f} | {row['Calc. Sink Rate (B2) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B2)']:<15.2f}")
+        print(
+            f"{'Band 3':<10} | {0.0:<12.1f} | {row['Calc. Airspeed (B3) (knots)']:<17.1f} | {row['Calc. Sink Rate (B3) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B3)']:<15.2f}")
+
+        print("\nSimulation Parameters & Results:")
+        print("-" * 100)
+        print(f"{'Thermal Density (per km^2)':<27} | {SCENARIO_LAMBDA_THERMALS_PER_SQ_KM:<25.2f}")
+        print(f"{'Thermal Strength Lambda':<27} | {SCENARIO_LAMBDA_STRENGTH:<25.1f}")
+        print(f"{'Successful Flights':<27} | {successful_flights:<25}")
+        print("-" * 100)
 
         csv_filename = "thermal_intercept_simulation_results_poisson_dist_arc_search_dynamic_path_corrected.csv"
         try:
