@@ -54,16 +54,12 @@ MIN_SAFE_ALTITUDE = 500.0  # Minimum altitude for a safe landing
 pol_v = np.array([45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120])
 pol_w = np.array([1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0, 3.4, 3.8, 4.2, 4.6, 5.0, 5.5, 6.0])
 
-# --- Scenario Parameters ---
-SCENARIO_Z_CBL = 2500.0
-SCENARIO_MC_SNIFF_BAND1 = 3.0  # User-defined MC setting for the top band
-SCENARIO_MC_SNIFF_BAND2 = 1.0  # User-defined MC setting for the middle band
-# Altitude boundary for the middle band - now calculated as (2/3) * CBL
-SCENARIO_MIN_ALT_BAND2 = (SCENARIO_Z_CBL / 3) * 2
-# Altitude boundary for the lowest band - now calculated as (1/3) * CBL
-SCENARIO_MIN_ALT_BAND3 = SCENARIO_Z_CBL / 3
-SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = 0.01
-SCENARIO_LAMBDA_STRENGTH = 3
+# --- Default Scenario Parameters ---
+DEFAULT_Z_CBL = 2500.0
+DEFAULT_MC_SNIFF_BAND1 = 4.0
+DEFAULT_MC_SNIFF_BAND2 = 2.0
+DEFAULT_LAMBDA_THERMALS_PER_SQ_KM = 0.1
+DEFAULT_LAMBDA_STRENGTH = 3
 SEARCH_ARC_ANGLE_DEGREES = 30.0
 RANDOM_END_POINT_DISTANCE = 100000.0
 
@@ -102,9 +98,14 @@ def distance_from_point_to_line_segment(point, line_start, line_end):
         distance = math.sqrt((px - x1) ** 2 + (py - y1) ** 2)
         return distance, (closest_x, closest_y)
     t = ((px - x1) * dx + (py - y1) * dy) / line_segment_length_sq
-    t = max(0, min(1, t))
-    closest_x = x1 + t * dx
-    closest_y = y1 + t * dy
+    if t < 0:
+        closest_x, closest_y = x1, y1
+    elif t > 1:
+        closest_x, closest_y = x2, y2
+    else:
+        closest_x = x1 + t * dx
+        closest_y = y1 + t * dy
+
     distance = math.sqrt((px - closest_x) ** 2 + (py - closest_y) ** 2)
     return distance, (closest_x, closest_y)
 
@@ -184,22 +185,25 @@ def calculate_bearing_delta(start_point, next_point, end_point):
     return delta
 
 
-def get_band_info(altitude):
+def get_band_info(altitude, scenario_z_cbl, scenario_mc_band1, scenario_mc_band2):
     """
     Determines the current altitude band, Macready setting, and altitude to the next band boundary.
     """
-    if altitude >= SCENARIO_MIN_ALT_BAND2:
-        return "Band 1", SCENARIO_MC_SNIFF_BAND1, altitude - SCENARIO_MIN_ALT_BAND2
-    elif altitude >= SCENARIO_MIN_ALT_BAND3:
-        return "Band 2", SCENARIO_MC_SNIFF_BAND2, altitude - SCENARIO_MIN_ALT_BAND3
+    min_alt_band2 = (scenario_z_cbl / 3) * 2
+    min_alt_band3 = scenario_z_cbl / 3
+
+    if altitude >= min_alt_band2:
+        return "Band 1", scenario_mc_band1, altitude - min_alt_band2, min_alt_band2
+    elif altitude >= min_alt_band3:
+        return "Band 2", scenario_mc_band2, altitude - min_alt_band3, min_alt_band3
     else:
-        return "Band 3", 0.0, altitude - MIN_SAFE_ALTITUDE
+        return "Band 3", 0.0, altitude - MIN_SAFE_ALTITUDE, MIN_SAFE_ALTITUDE
 
 
 # --- Main Dynamic Simulation Function for Visualization (Option 1) ---
 def simulate_dynamic_glide_path_and_draw(
         z_cbl_meters, lambda_thermals_per_sq_km, lambda_strength,
-        end_point, fig_width=12, fig_height=12
+        mc_sniff_band1, mc_sniff_band2, end_point, fig_width=12, fig_height=12
 ):
     """
     Simulates a glider's flight and visualizes the path.
@@ -243,8 +247,7 @@ def simulate_dynamic_glide_path_and_draw(
 
     print("--- Single Flight Simulation Printout ---")
     print(f"Initial Bearing (Origin to End): {initial_bearing:.2f} deg")
-    print(
-        f"Macready Settings: Band 1={SCENARIO_MC_SNIFF_BAND1:.1f}m/s, Band 2={SCENARIO_MC_SNIFF_BAND2:.1f}m/s, Band 3=0.0m/s")
+    print(f"Macready Settings: Band 1={mc_sniff_band1:.1f}m/s, Band 2={mc_sniff_band2:.1f}m/s, Band 3=0.0m/s")
     print("-" * 150)
     # Changed 'New Band' to 'Band'
     print(
@@ -263,14 +266,13 @@ def simulate_dynamic_glide_path_and_draw(
         path_start = current_pos
         distance_to_end = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
 
-        # Check if the remaining distance to the end is within a direct glide
-        current_band, current_mc_sniff_ms, altitude_to_next_band = get_band_info(current_altitude)
+        current_band, current_mc_sniff_ms, altitude_to_next_band, _ = get_band_info(current_altitude, z_cbl_meters,
+                                                                                    mc_sniff_band1, mc_sniff_band2)
         airspeed_ms, sink_rate_ms, glide_ratio, airspeed_knots, sink_rate_knots = get_glider_parameters(
             current_mc_sniff_ms)
         direct_glide_dist = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
 
         if distance_to_end < direct_glide_dist:
-            # Final direct glide
             travel_distance = distance_to_end
             next_pos = end_point
 
@@ -281,10 +283,8 @@ def simulate_dynamic_glide_path_and_draw(
             path_segments.append((path_start, current_pos))
             total_distance_covered += travel_distance
 
-            # FIX: Calculate delta here before printing
             delta = calculate_bearing_delta(path_start, current_pos, end_point)
 
-            # Final printout
             print(
                 f"{total_distance_covered / 1000:<12.3f} | {current_altitude:<9.0f} | {delta:<12.2f} | {'Band 3':<10} | {current_mc_sniff_ms:<15.1f} | {'N/A':<15} | {airspeed_knots:<15.1f} | {sink_rate_ms:<15.2f} | {'Final Glide':<10}")
 
@@ -294,38 +294,25 @@ def simulate_dynamic_glide_path_and_draw(
                 print("\n--- Simulation Result: FAILURE. Glider landed before destination. ---")
             break
 
-        # If not on a final glide, proceed with thermal search
         glide_dist_to_band = altitude_to_next_band * glide_ratio
         glide_dist_to_safe_landing = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
 
-        # FIX: Ensure segment_length is always positive unless a termination condition is met.
-        # This prevents the simulation from breaking prematurely at a band boundary.
         segment_length = min(distance_to_end, glide_dist_to_band, glide_dist_to_safe_landing)
         if segment_length <= 0:
-            segment_length = distance_to_end  # Fallback to prevent infinite loops if other distances are zero
+            segment_length = distance_to_end
+            if segment_length <= 0:
+                return True
 
         bearing_to_end_radians = math.atan2(end_point[1] - path_start[1], end_point[0] - path_start[0])
         bearing_to_end_degrees = math.degrees(bearing_to_end_radians)
         if bearing_to_end_degrees < 0: bearing_to_end_degrees += 360
 
         arc_half_angle_degrees = SEARCH_ARC_ANGLE_DEGREES / 2
-        arc_start_angle = bearing_to_end_degrees - arc_half_angle_degrees
-        arc_end_angle = bearing_to_end_degrees + arc_half_angle_degrees
-
-        arc_line_upper_end = (path_start[0] + segment_length * math.cos(math.radians(arc_end_angle)),
-                              path_start[1] + segment_length * math.sin(math.radians(arc_end_angle)))
-        arc_line_lower_end = (path_start[0] + segment_length * math.cos(math.radians(arc_start_angle)),
-                              path_start[1] + segment_length * math.sin(math.radians(arc_end_angle)))
-
-        ax.plot([path_start[0], arc_line_upper_end[0]], [path_start[1], arc_line_upper_end[1]],
-                'g--', linewidth=0.5, alpha=0.7, label='Search Arc' if len(path_segments) == 0 else '')
-        ax.plot([path_start[0], arc_line_lower_end[0]], [path_start[1], arc_line_lower_end[1]],
-                'g--', linewidth=0.5, alpha=0.7)
 
         nearest_thermal = None
         min_dist_to_thermal = float('inf')
 
-        sniffing_radius_meters_base = calculate_sniffing_radius(SCENARIO_LAMBDA_STRENGTH, current_mc_sniff_ms)
+        sniffing_radius_meters_base = calculate_sniffing_radius(lambda_strength, current_mc_sniff_ms)
 
         for thermal in updraft_thermals_info:
             thermal_center = thermal['center']
@@ -345,12 +332,8 @@ def simulate_dynamic_glide_path_and_draw(
                 angle_from_line += 360
 
             is_in_arc = abs(angle_from_line) <= arc_half_angle_degrees
-            dist_to_upper_line, _ = distance_from_point_to_line_segment(thermal_center, path_start, arc_line_upper_end)
-            dist_to_lower_line, _ = distance_from_point_to_line_segment(thermal_center, path_start, arc_line_lower_end)
-            is_near_arc_edge = (dist_to_upper_line <= sniffing_radius_meters_base) or (
-                        dist_to_lower_line <= sniffing_radius_meters_base)
 
-            if (is_in_arc or is_near_arc_edge) and dist_to_thermal < min_dist_to_thermal:
+            if is_in_arc and dist_to_thermal < min_dist_to_thermal:
                 min_dist_to_thermal = dist_to_thermal
                 nearest_thermal = thermal
 
@@ -370,7 +353,6 @@ def simulate_dynamic_glide_path_and_draw(
         path_segments.append((path_start, current_pos))
         total_distance_covered += travel_distance
 
-        # Determine the action and print values
         action = "Glide"
         updraft_val = "N/A"
         if nearest_thermal and min_dist_to_thermal < segment_length:
@@ -382,7 +364,6 @@ def simulate_dynamic_glide_path_and_draw(
                 current_altitude = z_cbl_meters
                 action = "Climb"
 
-        # Logic for printing only when values change
         band_to_print = current_band if current_band != previous_band else ''
         action_to_print = action if action != previous_action else ''
 
@@ -392,11 +373,9 @@ def simulate_dynamic_glide_path_and_draw(
         print(
             f"{total_distance_covered / 1000:<12.3f} | {current_altitude:<9.0f} | {delta:<12.2f} | {band_to_print:<10} | {current_mc_sniff_ms:<15.1f} | {updraft_print_val} | {airspeed_knots:<15.1f} | {sink_rate_ms:<15.2f} | {action_to_print:<10}")
 
-        # Update previous state for next iteration
         previous_band = current_band
         previous_action = action
 
-    # Final flight state
     if current_altitude > MIN_SAFE_ALTITUDE:
         print("\n--- Simulation Result: SUCCESS. Glider reached destination. ---")
     else:
@@ -437,7 +416,7 @@ def simulate_dynamic_glide_path_and_draw(
 # --- Main Dynamic Simulation Function for Monte Carlo (Option 2) ---
 def simulate_intercept_experiment_dynamic(
         z_cbl_meters, lambda_thermals_per_sq_km, lambda_strength,
-        end_point
+        mc_sniff_band1, mc_sniff_band2, end_point
 ):
     """
     Runs a single, non-visual simulation of a glider's flight.
@@ -460,8 +439,8 @@ def simulate_intercept_experiment_dynamic(
         path_start = current_pos
         distance_to_end = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
 
-        # Check for final direct glide
-        current_band, current_mc_sniff_ms, _ = get_band_info(current_altitude)
+        current_band, current_mc_sniff_ms, _, _ = get_band_info(current_altitude, z_cbl_meters, mc_sniff_band1,
+                                                                mc_sniff_band2)
         airspeed_ms, sink_rate_ms, glide_ratio, _, _ = get_glider_parameters(current_mc_sniff_ms)
         direct_glide_dist = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
 
@@ -469,19 +448,17 @@ def simulate_intercept_experiment_dynamic(
             final_glide_altitude_drop = (distance_to_end / airspeed_ms) * sink_rate_ms
             return current_altitude - final_glide_altitude_drop > MIN_SAFE_ALTITUDE
 
-        # If not on a final glide, proceed with thermal search
-        current_band, current_mc_sniff_ms, altitude_to_next_band = get_band_info(current_altitude)
+        current_band, current_mc_sniff_ms, altitude_to_next_band, _ = get_band_info(current_altitude, z_cbl_meters,
+                                                                                    mc_sniff_band1, mc_sniff_band2)
         airspeed_ms, sink_rate_ms, glide_ratio, _, _ = get_glider_parameters(current_mc_sniff_ms)
 
         glide_dist_to_band = altitude_to_next_band * glide_ratio
         glide_dist_to_safe_landing = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
         segment_length = min(distance_to_end, glide_dist_to_band, glide_dist_to_safe_landing)
 
-        # FIX: If segment length is zero or less (due to floating point math at boundary),
-        # continue to the next iteration with the new band info.
         if segment_length <= 0:
             segment_length = distance_to_end
-            if segment_length <= 0:  # If both distances are zero, we are at the end point
+            if segment_length <= 0:
                 return True
 
         bearing_to_end_radians = math.atan2(end_point[1] - path_start[1], end_point[0] - path_start[0])
@@ -493,7 +470,7 @@ def simulate_intercept_experiment_dynamic(
         nearest_thermal = None
         min_dist_to_thermal = float('inf')
 
-        sniffing_radius_meters_base = calculate_sniffing_radius(SCENARIO_LAMBDA_STRENGTH, current_mc_sniff_ms)
+        sniffing_radius_meters_base = calculate_sniffing_radius(lambda_strength, current_mc_sniff_ms)
 
         for thermal in updraft_thermals_info:
             thermal_center = thermal['center']
@@ -540,9 +517,73 @@ def simulate_intercept_experiment_dynamic(
     return current_altitude > MIN_SAFE_ALTITUDE
 
 
+def get_user_input_for_parameters():
+    """
+    Prompts the user for key simulation parameters with defaults.
+    """
+    print("\n--- Customize Simulation Parameters (Press Enter to use default) ---")
+
+    # Get Thermal Density
+    thermal_density = input(f"Enter Thermal Density (per km^2) [{DEFAULT_LAMBDA_THERMALS_PER_SQ_KM}]: ")
+    if thermal_density == "":
+        thermal_density = DEFAULT_LAMBDA_THERMALS_PER_SQ_KM
+    else:
+        thermal_density = float(thermal_density)
+
+    # Get CBL Height
+    cbl_height = input(f"Enter Cloud Base Level (m) [{DEFAULT_Z_CBL}]: ")
+    if cbl_height == "":
+        cbl_height = DEFAULT_Z_CBL
+    else:
+        cbl_height = float(cbl_height)
+
+    # Get MC setting for Band 1
+    mc_band1 = input(f"Enter Macready Setting for Band 1 (m/s) [{DEFAULT_MC_SNIFF_BAND1}]: ")
+    if mc_band1 == "":
+        mc_band1 = DEFAULT_MC_SNIFF_BAND1
+    else:
+        mc_band1 = float(mc_band1)
+
+    # Get MC setting for Band 2
+    mc_band2 = input(f"Enter Macready Setting for Band 2 (m/s) [{DEFAULT_MC_SNIFF_BAND2}]: ")
+    if mc_band2 == "":
+        mc_band2 = DEFAULT_MC_SNIFF_BAND2
+    else:
+        mc_band2 = float(mc_band2)
+
+    # Get Thermal Strength Lambda
+    thermal_strength_lambda = input(f"Enter Thermal Strength Lambda (λ) [{DEFAULT_LAMBDA_STRENGTH}]: ")
+    if thermal_strength_lambda == "":
+        thermal_strength_lambda = DEFAULT_LAMBDA_STRENGTH
+    else:
+        thermal_strength_lambda = float(thermal_strength_lambda)
+
+    return {
+        'thermal_density': thermal_density,
+        'cbl_height': cbl_height,
+        'mc_band1': mc_band1,
+        'mc_band2': mc_band2,
+        'thermal_strength_lambda': thermal_strength_lambda
+    }
+
+
 # --- Main execution block ---
 if __name__ == '__main__':
-    print("Choose an option:")
+    # Get user-defined or default parameters
+    params = get_user_input_for_parameters()
+
+    # Set the scenario parameters based on user input
+    SCENARIO_Z_CBL = params['cbl_height']
+    SCENARIO_MC_SNIFF_BAND1 = params['mc_band1']
+    SCENARIO_MC_SNIFF_BAND2 = params['mc_band2']
+    SCENARIO_LAMBDA_THERMALS_PER_SQ_KM = params['thermal_density']
+    SCENARIO_LAMBDA_STRENGTH = params['thermal_strength_lambda']
+
+    # Recalculate band boundaries based on the new CBL height
+    SCENARIO_MIN_ALT_BAND2 = (SCENARIO_Z_CBL / 3) * 2
+    SCENARIO_MIN_ALT_BAND3 = SCENARIO_Z_CBL / 3
+
+    print("\nChoose an option:")
     print("1. Generate a single plot (visualize dynamic glider path)")
     print("2. Run Monte Carlo simulation (compute probability for a single scenario)")
 
@@ -558,6 +599,8 @@ if __name__ == '__main__':
             z_cbl_meters=SCENARIO_Z_CBL,
             lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
             lambda_strength=SCENARIO_LAMBDA_STRENGTH,
+            mc_sniff_band1=SCENARIO_MC_SNIFF_BAND1,
+            mc_sniff_band2=SCENARIO_MC_SNIFF_BAND2,
             end_point=random_end_point
         )
     elif choice == '2':
@@ -575,6 +618,8 @@ if __name__ == '__main__':
                     z_cbl_meters=SCENARIO_Z_CBL,
                     lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
                     lambda_strength=SCENARIO_LAMBDA_STRENGTH,
+                    mc_sniff_band1=SCENARIO_MC_SNIFF_BAND1,
+                    mc_sniff_band2=SCENARIO_MC_SNIFF_BAND2,
                     end_point=random_end_point
             ):
                 successful_flights += 1
@@ -608,19 +653,17 @@ if __name__ == '__main__':
 
         print("\n" + "=" * 110)
         print("--- Monte Carlo Simulation Results for Single Scenario ---")
-        print(f"Z: {SCENARIO_Z_CBL:<8} | Arc: {SEARCH_ARC_ANGLE_DEGREES:<8.1f} | Prob: {probability:<8.4f}")
+        print(f"Z: {SCENARIO_Z_CBL:<8.1f} | Arc: {SEARCH_ARC_ANGLE_DEGREES:<8.1f} | Prob: {probability:<8.4f}")
         print("-" * 110)
 
         print("\nPerformance Parameters per Band:")
         print("-" * 110)
 
-        # Headers for the band-specific performance table, including upper height
         band_headers = ['Band', 'Upper Height (m)', 'MC (m/s)', 'Airspeed (knots)', 'Sink Rate (m/s)', 'Glide Ratio']
         print(
             f"{band_headers[0]:<10} | {band_headers[1]:<18} | {band_headers[2]:<12} | {band_headers[3]:<17} | {band_headers[4]:<17} | {band_headers[5]:<15}")
         print("-" * 110)
 
-        # Print data for each band
         row = all_results[0]
         print(
             f"{'Band 1':<10} | {SCENARIO_Z_CBL:<18.0f} | {SCENARIO_MC_SNIFF_BAND1:<12.1f} | {row['Calc. Airspeed (B1) (knots)']:<17.1f} | {row['Calc. Sink Rate (B1) (m/s)']:<17.2f} | {row['Calc. Glide Ratio (B1)']:<15.2f}")
