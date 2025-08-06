@@ -249,7 +249,6 @@ def simulate_dynamic_glide_path_and_draw(
     print(f"Initial Bearing (Origin to End): {initial_bearing:.2f} deg")
     print(f"Macready Settings: Band 1={mc_sniff_band1:.1f}m/s, Band 2={mc_sniff_band2:.1f}m/s, Band 3=0.0m/s")
     print("-" * 150)
-    # Changed 'New Band' to 'Band'
     print(
         f"{'Dist (km)':<12} | {'Alt (m)':<9} | {'Delta (deg)':<12} | {'Band':<10} | {'MC Set (m/s)':<15} | {'Updraft (m/s)':<15} | {'Speed (knots)':<15} | {'Sink Rate (m/s)':<15} | {'Action':<10}")
     print("-" * 150)
@@ -257,6 +256,55 @@ def simulate_dynamic_glide_path_and_draw(
     # Variables to track previous state for concise printing
     previous_band = None
     previous_action = None
+
+    # --- Initial Printout at the start of the flight ---
+    current_band, current_mc_sniff_ms, _, _ = get_band_info(current_altitude, z_cbl_meters, mc_sniff_band1,
+                                                            mc_sniff_band2)
+    airspeed_ms, sink_rate_ms, _, airspeed_knots, sink_rate_knots = get_glider_parameters(current_mc_sniff_ms)
+
+    # Find nearest thermal in arc for the initial delta calculation
+    initial_delta = 0.0
+    bearing_to_end_degrees = initial_bearing
+    arc_half_angle_degrees = SEARCH_ARC_ANGLE_DEGREES / 2
+    nearest_thermal_initial = None
+    min_dist_to_thermal_initial = float('inf')
+
+    sniffing_radius_meters_base = calculate_sniffing_radius(lambda_strength, current_mc_sniff_ms)
+
+    # The simulation area side needs to be calculated dynamically from the start point to the end point
+    # to account for thermals that are further out but still in the arc.
+    start_pos_temp = (0, 0)
+    distance_to_end_temp = math.hypot(end_point[0] - start_pos_temp[0], end_point[1] - start_pos_temp[1])
+    glide_dist_to_safe_landing_temp = (current_altitude - MIN_SAFE_ALTITUDE) * \
+                                      get_glider_parameters(current_mc_sniff_ms)[2]
+    segment_length_temp = min(distance_to_end_temp, glide_dist_to_safe_landing_temp)
+
+    for thermal in updraft_thermals_info:
+        thermal_center = thermal['center']
+        dist_to_thermal = math.hypot(thermal_center[0] - start_pos_temp[0], thermal_center[1] - start_pos_temp[1])
+        if dist_to_thermal > segment_length_temp + sniffing_radius_meters_base:
+            continue
+        thermal_bearing_from_start = math.degrees(
+            math.atan2(thermal_center[1] - start_pos_temp[1], thermal_center[0] - start_pos_temp[0]))
+        if thermal_bearing_from_start < 0: thermal_bearing_from_start += 360
+        angle_from_line = thermal_bearing_from_start - bearing_to_end_degrees
+        if angle_from_line > 180:
+            angle_from_line -= 360
+        elif angle_from_line <= -180:
+            angle_from_line += 360
+        if abs(angle_from_line) <= arc_half_angle_degrees and dist_to_thermal < min_dist_to_thermal_initial:
+            min_dist_to_thermal_initial = dist_to_thermal
+            nearest_thermal_initial = thermal
+            initial_delta = angle_from_line
+
+    if nearest_thermal_initial is None:
+        initial_delta = 0.0
+
+    print(
+        f"{0:<12.3f} | {current_altitude:<9.0f} | {initial_delta:<12.2f} | {'Band 1':<10} | {current_mc_sniff_ms:<15.1f} | {'N/A':<15} | {airspeed_knots:<15.1f} | {sink_rate_ms:<15.2f} | {'Glide':<10}")
+
+    previous_band = "Band 1"
+    previous_action = "Glide"
 
     # --- Corrected logic for main glide loop ---
     while math.hypot(end_point[0] - current_pos[0], end_point[1] - current_pos[1]) > EPSILON:
@@ -285,8 +333,11 @@ def simulate_dynamic_glide_path_and_draw(
 
             delta = calculate_bearing_delta(path_start, current_pos, end_point)
 
+            band_to_print = "Band 3"
+            action_to_print = "Final Glide"
+
             print(
-                f"{total_distance_covered / 1000:<12.3f} | {current_altitude:<9.0f} | {delta:<12.2f} | {'Band 3':<10} | {current_mc_sniff_ms:<15.1f} | {'N/A':<15} | {airspeed_knots:<15.1f} | {sink_rate_ms:<15.2f} | {'Final Glide':<10}")
+                f"{total_distance_covered / 1000:<12.3f} | {current_altitude:<9.0f} | {delta:<12.2f} | {band_to_print:<10} | {current_mc_sniff_ms:<15.1f} | {'N/A':<15} | {airspeed_knots:<15.1f} | {sink_rate_ms:<15.2f} | {action_to_print:<10}")
 
             if current_altitude > MIN_SAFE_ALTITUDE:
                 print("\n--- Simulation Result: SUCCESS. Glider reached destination. ---")
@@ -353,7 +404,6 @@ def simulate_dynamic_glide_path_and_draw(
         path_segments.append((path_start, current_pos))
         total_distance_covered += travel_distance
 
-        action = "Glide"
         updraft_val = "N/A"
         if nearest_thermal and min_dist_to_thermal < segment_length:
             updraft_val = nearest_thermal['updraft_strength']
@@ -363,15 +413,61 @@ def simulate_dynamic_glide_path_and_draw(
             if updraft_val >= current_mc_sniff_ms:
                 current_altitude = z_cbl_meters
                 action = "Climb"
+            else:
+                action = "Glide"
+        else:
+            action = "Glide"
+
+        # Determine the bearing to the *next* thermal (if any) to calculate the delta for the next segment
+        delta_to_print = 0.0
+        if nearest_thermal and min_dist_to_thermal < segment_length:
+            # Re-calculate parameters for the new altitude
+            current_band, current_mc_sniff_ms_new, _, _ = get_band_info(current_altitude, z_cbl_meters, mc_sniff_band1,
+                                                                        mc_sniff_band2)
+            airspeed_ms_new, _, glide_ratio_new, _, _ = get_glider_parameters(current_mc_sniff_ms_new)
+
+            # Recalculate based on the new position (current_pos)
+            path_start_new = current_pos
+            distance_to_end_new = math.hypot(end_point[0] - path_start_new[0], end_point[1] - path_start_new[1])
+            glide_dist_to_safe_landing_new = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio_new
+            segment_length_new = min(distance_to_end_new, glide_dist_to_safe_landing_new)
+
+            bearing_to_end_degrees_new = math.degrees(
+                math.atan2(end_point[1] - path_start_new[1], end_point[0] - path_start_new[0]))
+            if bearing_to_end_degrees_new < 0: bearing_to_end_degrees_new += 360
+
+            nearest_thermal_next = None
+            min_dist_to_thermal_next = float('inf')
+
+            sniffing_radius_meters_base_new = calculate_sniffing_radius(lambda_strength, current_mc_sniff_ms_new)
+            for thermal in updraft_thermals_info:  # Check remaining thermals
+                thermal_center = thermal['center']
+                dist_to_thermal = math.hypot(thermal_center[0] - path_start_new[0],
+                                             thermal_center[1] - path_start_new[1])
+                if dist_to_thermal > segment_length_new + sniffing_radius_meters_base_new:
+                    continue
+                thermal_bearing_from_start = math.degrees(
+                    math.atan2(thermal_center[1] - path_start_new[1], thermal_center[0] - path_start_new[0]))
+                if thermal_bearing_from_start < 0: thermal_bearing_from_start += 360
+                angle_from_line = thermal_bearing_from_start - bearing_to_end_degrees_new
+                if angle_from_line > 180:
+                    angle_from_line -= 360
+                elif angle_from_line <= -180:
+                    angle_from_line += 360
+                if abs(angle_from_line) <= arc_half_angle_degrees and dist_to_thermal < min_dist_to_thermal_next:
+                    min_dist_to_thermal_next = dist_to_thermal
+                    nearest_thermal_next = thermal
+                    delta_to_print = angle_from_line
+        else:
+            delta_to_print = 0.0
 
         band_to_print = current_band if current_band != previous_band else ''
         action_to_print = action if action != previous_action else ''
 
         updraft_print_val = f"{updraft_val:<15.1f}" if isinstance(updraft_val, (int, float)) else f"{updraft_val:<15}"
 
-        delta = calculate_bearing_delta(path_start, current_pos, end_point)
         print(
-            f"{total_distance_covered / 1000:<12.3f} | {current_altitude:<9.0f} | {delta:<12.2f} | {band_to_print:<10} | {current_mc_sniff_ms:<15.1f} | {updraft_print_val} | {airspeed_knots:<15.1f} | {sink_rate_ms:<15.2f} | {action_to_print:<10}")
+            f"{total_distance_covered / 1000:<12.3f} | {current_altitude:<9.0f} | {delta_to_print:<12.2f} | {band_to_print:<10} | {current_mc_sniff_ms:<15.1f} | {updraft_print_val} | {airspeed_knots:<15.1f} | {sink_rate_ms:<15.2f} | {action_to_print:<10}")
 
         previous_band = current_band
         previous_action = action
