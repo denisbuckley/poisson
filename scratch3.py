@@ -40,6 +40,7 @@ import csv
 # --- Constants ---
 KNOT_TO_MS = 0.514444
 FT_TO_M = 0.3048
+MS_TO_KMH = 3.6  # Conversion constant for meters per second to kilometers per hour
 
 C_UPDRAFT_STRENGTH_DECREMENT = 5.9952e-7
 FIXED_THERMAL_SYSTEM_OUTER_DIAMETER_METERS = 1200.0
@@ -58,8 +59,8 @@ pol_w = np.array([1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0, 3.4, 3.8, 4.2, 4.
 DEFAULT_Z_CBL = 2500.0
 DEFAULT_MC_SNIFF_BAND1 = 4.0
 DEFAULT_MC_SNIFF_BAND2 = 2.0
-DEFAULT_LAMBDA_THERMALS_PER_SQ_KM = 0.01  # Updated as requested
-DEFAULT_LAMBDA_STRENGTH = 2  # Updated as requested
+DEFAULT_LAMBDA_THERMALS_PER_SQ_KM = 0.01
+DEFAULT_LAMBDA_STRENGTH = 2
 SEARCH_ARC_ANGLE_DEGREES = 30.0
 RANDOM_END_POINT_DISTANCE = 100000.0
 
@@ -498,7 +499,7 @@ def simulate_intercept_experiment_dynamic(
         mc_sniff_band1, mc_sniff_band2, end_point
 ):
     """
-    Runs a single, non-visual simulation of a glider's flight.
+    Runs a single, non-visual simulation of a glider's flight and returns key metrics.
     """
     plot_padding = 20000.0
     max_coord = max(abs(end_point[0]), abs(end_point[1]))
@@ -510,12 +511,17 @@ def simulate_intercept_experiment_dynamic(
 
     current_pos = (0, 0)
     current_altitude = z_cbl_meters
+    total_height_climbed = 0.0
+    total_climbing_time = 0.0
+    total_gliding_time = 0.0
+    total_distance_covered = 0.0
 
     remaining_thermals = list(updraft_thermals_info)
 
     while math.hypot(end_point[0] - current_pos[0], end_point[1] - current_pos[1]) > EPSILON:
         if current_altitude <= MIN_SAFE_ALTITUDE:
-            return False
+            straight_line_dist_origin = math.hypot(current_pos[0], current_pos[1])
+            return {'success': False, 'distance_to_land': straight_line_dist_origin}
 
         path_start = current_pos
         distance_to_end = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
@@ -529,8 +535,23 @@ def simulate_intercept_experiment_dynamic(
         direct_glide_dist = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
 
         if distance_to_end < direct_glide_dist:
-            final_glide_altitude_drop = (distance_to_end / airspeed_ms) * sink_rate_ms
-            return current_altitude - final_glide_altitude_drop > MIN_SAFE_ALTITUDE
+            time_to_travel = distance_to_end / airspeed_ms
+            altitude_drop = time_to_travel * sink_rate_ms
+            current_altitude -= altitude_drop
+            total_gliding_time += time_to_travel
+            total_distance_covered += distance_to_end
+
+            final_altitude = current_altitude
+            straight_line_dist_origin = math.hypot(end_point[0], end_point[1])
+
+            return {
+                'success': True,
+                'total_height_climbed': total_height_climbed,
+                'total_climbing_time': total_climbing_time,
+                'total_gliding_time': total_gliding_time,
+                'total_time': total_climbing_time + total_gliding_time,
+                'straight_line_distance': straight_line_dist_origin
+            }
 
         glide_dist_to_band = altitude_to_next_band * glide_ratio
 
@@ -591,13 +612,27 @@ def simulate_intercept_experiment_dynamic(
 
         current_altitude -= altitude_drop
         current_pos = next_pos
+        total_gliding_time += time_to_travel
+        total_distance_covered += travel_distance
 
         if is_thermal_intercept:
             remaining_thermals.remove(nearest_thermal_in_arc)
-            if float(nearest_thermal_in_arc['updraft_strength']) >= float(current_mc_sniff_ms):
+            updraft_val = nearest_thermal_in_arc['updraft_strength']
+            if updraft_val >= current_mc_sniff_ms:
+                height_climbed = z_cbl_meters - current_altitude
+                climbing_time = height_climbed / updraft_val
+                total_height_climbed += height_climbed
+                total_climbing_time += climbing_time
                 current_altitude = z_cbl_meters
 
-    return current_altitude > MIN_SAFE_ALTITUDE
+    return {
+        'success': True,
+        'total_height_climbed': total_height_climbed,
+        'total_climbing_time': total_climbing_time,
+        'total_gliding_time': total_gliding_time,
+        'total_time': total_climbing_time + total_gliding_time,
+        'straight_line_distance': math.hypot(end_point[0], end_point[1])
+    }
 
 
 def get_user_input_for_parameters():
@@ -691,21 +726,30 @@ if __name__ == '__main__':
         print(f"\n--- Running Monte Carlo Simulation for a Single Scenario ({num_simulations} trials) ---")
 
         successful_flights = 0
+        successful_metrics = []
+        failed_distances = []
+
         tqdm_desc = "Running Monte Carlo Trials"
         for _ in tqdm(range(num_simulations), desc=tqdm_desc):
             random_angle = random.uniform(0, 360)
             end_point_x = RANDOM_END_POINT_DISTANCE * math.cos(math.radians(random_angle))
             end_point_y = RANDOM_END_POINT_DISTANCE * math.sin(math.radians(random_angle))
             random_end_point = (end_point_x, end_point_y)
-            if simulate_intercept_experiment_dynamic(
-                    z_cbl_meters=SCENARIO_Z_CBL,
-                    lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
-                    lambda_strength=SCENARIO_LAMBDA_STRENGTH,
-                    mc_sniff_band1=SCENARIO_MC_SNIFF_BAND1,
-                    mc_sniff_band2=SCENARIO_MC_SNIFF_BAND2,
-                    end_point=random_end_point
-            ):
+
+            result = simulate_intercept_experiment_dynamic(
+                z_cbl_meters=SCENARIO_Z_CBL,
+                lambda_thermals_per_sq_km=SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
+                lambda_strength=SCENARIO_LAMBDA_STRENGTH,
+                mc_sniff_band1=SCENARIO_MC_SNIFF_BAND1,
+                mc_sniff_band2=SCENARIO_MC_SNIFF_BAND2,
+                end_point=random_end_point
+            )
+
+            if result['success']:
                 successful_flights += 1
+                successful_metrics.append(result)
+            else:
+                failed_distances.append(result['distance_to_land'])
 
         probability = successful_flights / num_simulations
 
@@ -715,6 +759,23 @@ if __name__ == '__main__':
         airspeed2_ms, sink_rate2_ms, glide_ratio2, airspeed2_knots, sink_rate2_knots = get_glider_parameters(
             SCENARIO_MC_SNIFF_BAND2)
         airspeed3_ms, sink_rate3_ms, glide_ratio3, airspeed3_knots, sink_rate3_knots = get_glider_parameters(0.0)
+
+        # Calculate new metrics from simulation results
+        avg_Ht = sum(m['total_height_climbed'] for m in successful_metrics) / len(
+            successful_metrics) if successful_metrics else 0
+        avg_Tc = sum(m['total_climbing_time'] for m in successful_metrics) / len(
+            successful_metrics) if successful_metrics else 0
+        avg_Tg = sum(m['total_gliding_time'] for m in successful_metrics) / len(
+            successful_metrics) if successful_metrics else 0
+        avg_T = avg_Tc + avg_Tg
+        avg_Wc = avg_Ht / avg_Tc if avg_Tc > 0 else 0
+
+        # Correctly calculate Vmg using the fixed straight-line distance and the average total time
+        # The straight-line distance for a successful flight is always RANDOM_END_POINT_DISTANCE.
+        avg_Vmg_ms = RANDOM_END_POINT_DISTANCE / avg_T if avg_T > 0 else 0
+        avg_Vmg_kmh = avg_Vmg_ms * MS_TO_KMH
+
+        avg_failed_dist = sum(failed_distances) / len(failed_distances) if failed_distances else 0
 
         all_results = [{
             'Z (m)': SCENARIO_Z_CBL,
@@ -731,7 +792,14 @@ if __name__ == '__main__':
             'Thermal Density (per km^2)': SCENARIO_LAMBDA_THERMALS_PER_SQ_KM,
             'Thermal Strength Lambda': SCENARIO_LAMBDA_STRENGTH,
             'Successful Flights': successful_flights,
-            'Probability': probability
+            'Probability': probability,
+            'Avg Total Height Climbed (m)': avg_Ht,
+            'Avg Total Climbing Time (s)': avg_Tc,
+            'Avg Total Gliding Time (s)': avg_Tg,
+            'Avg Total Time (s)': avg_T,
+            'Avg Rate of Climb (m/s)': avg_Wc,
+            'Avg Speed Made Good (km/h)': avg_Vmg_kmh,
+            'Avg Failed Distance (m)': avg_failed_dist
         }]
 
         print("\n" + "=" * 110)
@@ -760,6 +828,13 @@ if __name__ == '__main__':
         print(f"{'Thermal Density (per km^2)':<27} | {SCENARIO_LAMBDA_THERMALS_PER_SQ_KM:<25.2f}")
         print(f"{'Thermal Strength Lambda':<27} | {SCENARIO_LAMBDA_STRENGTH:<25.1f}")
         print(f"{'Successful Flights':<27} | {successful_flights:<25}")
+        print(f"{'Avg Total Height Climbed (m)':<27} | {avg_Ht:<25.2f}")
+        print(f"{'Avg Total Climbing Time (s)':<27} | {avg_Tc:<25.2f}")
+        print(f"{'Avg Rate of Climb (m/s)':<27} | {avg_Wc:<25.2f}")
+        print(f"{'Avg Total Gliding Time (s)':<27} | {avg_Tg:<25.2f}")
+        print(f"{'Avg Total Time (s)':<27} | {avg_T:<25.2f}")
+        print(f"{'Avg Speed Made Good (km/h)':<27} | {avg_Vmg_kmh:<25.2f}")
+        print(f"{'Avg Failed Distance (m)':<27} | {avg_failed_dist:<25.2f}")
         print("-" * 110)
 
         csv_filename = "thermal_intercept_simulation_results_poisson_dist_arc_search_dynamic_path_corrected.csv"
@@ -771,7 +846,10 @@ if __name__ == '__main__':
                     'Calc. Sink Rate (B1) (m/s)', 'Calc. Sink Rate (B2) (m/s)', 'Calc. Sink Rate (B3) (m/s)',
                     'Search Arc Angle (deg)',
                     'Thermal Density (per km^2)', 'Thermal Strength Lambda',
-                    'Successful Flights', 'Probability'
+                    'Successful Flights', 'Probability',
+                    'Avg Total Height Climbed (m)', 'Avg Total Climbing Time (s)', 'Avg Total Gliding Time (s)',
+                    'Avg Total Time (s)', 'Avg Rate of Climb (m/s)', 'Avg Speed Made Good (km/h)',
+                    'Avg Failed Distance (m)'
                 ]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
@@ -781,4 +859,3 @@ if __name__ == '__main__':
             print(f"\nError writing to CSV file '{csv_filename}': {e}")
     else:
         print("Invalid choice. Please enter 1 or 2.")
-
