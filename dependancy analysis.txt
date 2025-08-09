@@ -1,0 +1,30 @@
+dependancy_analysis.png
+
+You are right to point that out. My apologies; I mistakenly included correlations from a different run. The correlations from the most recent script and plot are indeed different.
+Here is the correct analysis and interpretation based on the latest data and script.
+
+
+Probability Flight Completed
+
+The strongest dependencies for the probability of a successful flight are:
+	1	Thermal Density (per km^2): A positive correlation of 0.63. This indicates that a higher density of thermals is moderately associated with a higher probability of success.
+	2	Avg Speed Made Good (km/h): A positive correlation of 0.24. Flights that achieve a higher average speed also tend to have a higher probability of completion.
+	3	Avg Rate of Climb (m/s): A positive correlation of 0.19. A faster average rate of climb is weakly associated with a higher probability.
+	4	Thermal Strength Lambda: A positive correlation of 0.19. Stronger thermals are slightly associated with a higher probability of success.
+	5	MC_SNIFF_BAND1 (m/s): A negative correlation of −0.24. A slower sniff band speed for the first band is moderately associated with a higher probability.
+	6	MC_SNIFF_BAND2 (m/s): A negative correlation of −0.28. A slower sniff band speed for the second band is moderately associated with a higher probability.
+	7	Avg Total Height Climbed (m): A negative correlation of −0.37. Flights with a higher probability of success are associated with less overall height climbed.
+	8	Avg Total Climbing Time (s): A negative correlation of −0.42. This indicates that shorter climbing times are moderately associated with a higher probability of success.
+
+
+Average Speed Made Good
+
+The strongest dependencies for the average speed of the aircraft are:
+	1	Avg Rate of Climb (m/s): A very strong positive correlation of 0.93. This means that a higher average rate of climb is the most significant factor for achieving a greater average speed.
+	2	Thermal Strength Lambda: A strong positive correlation of 0.81. Stronger thermals are highly associated with a faster average speed.
+	3	Avg Total Height Climbed (m): A positive correlation of 0.31. Flights that climb to a greater total height are slightly associated with a faster average speed.
+	4	MC_SNIFF_BAND1 (m/s): A positive correlation of 0.25. A faster sniffing speed for the first band is slightly associated with a higher average speed.
+	5	Probability: A positive correlation of 0.24. A higher probability of a successful flight is slightly associated with a higher average speed.
+	6	Thermal Density (per km^2): A positive correlation of 0.17. A higher density of thermals is weakly associated with a faster average speed.
+	7	Avg Total Gliding Time (s): A moderate negative correlation of −0.54. This suggests that flights with shorter gliding times are associated with a higher average speed. This is surprising and suggests a strategy where longer glides might not be optimal for speed.
+	8	Avg Total Climbing Time (s): A strong negative correlation of −0.65. A shorter climbing time is strongly associated with a higher average speed. This points to a strategy where minimizing time spent climbing in thermals and maximizing speed is the goal.
