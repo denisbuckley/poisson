@@ -54,7 +54,7 @@ pol_w = np.array([1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0, 3.4, 3.8, 4.2, 4.
 DEFAULT_Z_CBL = 2500.0
 DEFAULT_MC_SNIFF_BAND1 = 4.0
 DEFAULT_MC_SNIFF_BAND2 = 2.0
-DEFAULT_LAMBDA_THERMALS_PER_SQ_KM = 0.02
+DEFAULT_LAMBDA_THERMALS_PER_SQ_KM = 0.000625
 DEFAULT_LAMBDA_STRENGTH = 2
 DEFAULT_SEARCH_ARC_ANGLE_DEGREES = 30.0
 RANDOM_END_POINT_DISTANCE = 100000.0
@@ -701,4 +701,3 @@ if __name__ == '__main__':
         run_nested_loop_simulation_and_save_to_csv()
     else:
         print("Invalid choice. Please run the script again and select 1, 2, or 3.")
-
