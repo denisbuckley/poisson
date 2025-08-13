@@ -5,7 +5,8 @@
 # 1. Single simulation with a detailed plot.
 # 2. Monte Carlo simulation with default parameters for statistical analysis.
 # 3. Nested loop simulation over a grid of parameters, with results saved to a CSV file.
-# 4. Nested loop simulation specifically for the new hexagonal grid pattern parameters.
+# 4. Nested loop simulation specifically for the new hexagonal grid pattern parameters,
+#    now with user-defined thermal density and search arc values.
 #
 # Key Features:
 # - Thermal Placement: Uses a hexagonal grid with a random component to place thermals.
@@ -16,6 +17,12 @@
 # - The glider flies to the nearest thermal in the arc, chooses to climb if
 #   the thermal strength is >= the current Macready, otherwise it continues to glide.
 # - The flight ends if the glider's altitude drops below 500m.
+#
+# --- Version 2: Debugging Final Glide Logic ---
+# The logic for determining a "successful" flight has a bug. This version adds
+# detailed print statements to the simulate_intercept_experiment_dynamic function to
+# track altitude and final glide calculations, specifically in scenarios where
+# the glider should fail but is incorrectly marked as successful.
 # -----------------------------
 
 import matplotlib.pyplot as plt
@@ -241,7 +248,11 @@ def simulate_intercept_experiment_dynamic(
     remaining_thermals = list(updraft_thermals_info)
 
     while math.hypot(end_point[0] - current_pos[0], end_point[1] - current_pos[1]) > EPSILON:
+        # --- DEBUG PRINT: Altitude Check ---
+        print(f"DEBUG: Current Altitude: {current_altitude:.2f}m")
         if current_altitude <= MIN_SAFE_ALTITUDE:
+            print(
+                f"DEBUG: Altitude ({current_altitude:.2f}m) is below minimum safe altitude ({MIN_SAFE_ALTITUDE}m). Flight failed.")
             straight_line_dist_origin = math.hypot(current_pos[0], current_pos[1])
             return {'success': False, 'distance_to_land': straight_line_dist_origin, 'path': path_points,
                     'path_details': path_details, 'total_distance_covered': total_distance_covered}
@@ -258,7 +269,12 @@ def simulate_intercept_experiment_dynamic(
 
         direct_glide_dist = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
 
+        # --- DEBUG PRINT: Final Glide Calculation ---
+        print(f"DEBUG: Current distance to end: {distance_to_end:.2f}m")
+        print(f"DEBUG: Max possible glide distance from current altitude: {direct_glide_dist:.2f}m")
+
         if distance_to_end < direct_glide_dist:
+            print("DEBUG: Condition for Final Glide met.")
             time_to_travel = distance_to_end / airspeed_ms
             altitude_drop = time_to_travel * sink_rate_ms
             current_altitude -= altitude_drop
@@ -521,15 +537,44 @@ def run_monte_carlo_simulation():
 def run_nested_loop_simulation():
     """
     Runs a nested loop simulation over a grid of parameters and saves the results to a CSV.
-    This version uses default thermal density parameters.
+    This version now takes user input for thermal density and search arc values.
     """
-    print("Starting Nested Loop Simulation with default parameters...")
+    print("Starting Nested Loop Simulation with user-defined parameters...")
+
+    default_densities = [0.000625, 0.005, 0.02]
+    user_density_input = input(
+        f"Enter thermal density values (per km^2) separated by commas (e.g., {','.join(map(str, default_densities))}), or press Enter for the defaults: ")
+
+    if user_density_input.strip() == "":
+        lambda_thermals_values = default_densities
+        print("Using default thermal densities.")
+    else:
+        try:
+            lambda_thermals_values = [float(x.strip()) for x in user_density_input.split(',')]
+            print(f"Using user-defined thermal densities: {lambda_thermals_values}")
+        except ValueError:
+            print("Invalid input. Please enter a comma-separated list of numbers. Using default values instead.")
+            lambda_thermals_values = default_densities
+
+    default_arcs = [30, 45, 60]
+    user_arc_input = input(
+        f"Enter search arc angles (degrees) separated by commas (e.g., {','.join(map(str, default_arcs))}), or press Enter for the defaults: ")
+
+    if user_arc_input.strip() == "":
+        search_arc_values = default_arcs
+        print("Using default search arc angles.")
+    else:
+        try:
+            search_arc_values = [float(x.strip()) for x in user_arc_input.split(',')]
+            print(f"Using user-defined search arc angles: {search_arc_values}")
+        except ValueError:
+            print("Invalid input. Please enter a comma-separated list of numbers. Using default values instead.")
+            search_arc_values = default_arcs
+
     z_cbl_values = [2500]
-    lambda_thermals_values = [0.000625, 0.005, 0.02]  # Original 3 values
     lambda_strength_values = [0.6638]
     mc_band1_values = list(np.arange(1, 6, 1))
     mc_band2_values = list(np.arange(1, 6, 1))
-    search_arc_values = [30]
 
     num_simulations_per_scenario = 1000
     all_scenario_results = []
@@ -612,15 +657,44 @@ def run_nested_loop_simulation():
 def run_nested_loop_hexagonal_simulation():
     """
     Runs a nested loop simulation with the specific hexagonal thermal parameters and saves the results to a CSV.
+    The thermal densities and search arc values are now user-defined inputs.
     """
     print("Starting Nested Loop Simulation for Hexagonal Pattern...")
+
+    default_densities = [0.000625, 0.005, 0.02, 0.01]
+    user_density_input = input(
+        f"Enter thermal density values (per km^2) separated by commas (e.g., {','.join(map(str, default_densities))}), or press Enter for the defaults: ")
+
+    if user_density_input.strip() == "":
+        lambda_thermals_values = default_densities
+        print("Using default thermal densities.")
+    else:
+        try:
+            lambda_thermals_values = [float(x.strip()) for x in user_density_input.split(',')]
+            print(f"Using user-defined thermal densities: {lambda_thermals_values}")
+        except ValueError:
+            print("Invalid input. Please enter a comma-separated list of numbers. Using default values instead.")
+            lambda_thermals_values = default_densities
+
+    default_arcs = [30, 45, 60]
+    user_arc_input = input(
+        f"Enter search arc angles (degrees) separated by commas (e.g., {','.join(map(str, default_arcs))}), or press Enter for the defaults: ")
+
+    if user_arc_input.strip() == "":
+        search_arc_values = default_arcs
+        print("Using default search arc angles.")
+    else:
+        try:
+            search_arc_values = [float(x.strip()) for x in user_arc_input.split(',')]
+            print(f"Using user-defined search arc angles: {search_arc_values}")
+        except ValueError:
+            print("Invalid input. Please enter a comma-separated list of numbers. Using default values instead.")
+            search_arc_values = default_arcs
+
     z_cbl_values = [2500]
-    # The four specific thermal density values we discussed
-    lambda_thermals_values = [0.000625, 0.005, 0.02, 0.01]
     lambda_strength_values = [0.6638]
     mc_band1_values = list(np.arange(1, 6, 1))
     mc_band2_values = list(np.arange(1, 6, 1))
-    search_arc_values = [30]
 
     num_simulations_per_scenario = 1000
     all_scenario_results = []
@@ -704,8 +778,8 @@ if __name__ == '__main__':
     print("Select a simulation mode:")
     print("1: Single simulation with plot and detailed printout")
     print("2: Monte Carlo simulation with default parameters")
-    print("3: Nested loop simulation with default thermal density parameters")
-    print("4: Nested loop simulation with specific hexagonal pattern thermal densities")
+    print("3: Nested loop simulation with user-defined parameters")
+    print("4: Nested loop simulation with specific hexagonal pattern and user-defined parameters")
 
     choice = input("Enter your choice (1, 2, 3, or 4): ")
 
