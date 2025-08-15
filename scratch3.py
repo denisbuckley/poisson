@@ -189,6 +189,148 @@ def generate_hexagonal_thermals(sim_area_side_meters, lambda_thermals_per_sq_km,
     return updraft_thermals
 
 
+# --- IMPORTS ---
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from scipy.stats import poisson
+import random
+import time
+import math
+import concurrent.futures
+
+# --- GLOBAL CONSTANTS ---
+GRAVITY = 9.81
+MAX_SIMULATION_TIME_SECONDS = 3600 * 24 * 10  # 10 days
+GLOBAL_MIN_ALTITUDE = 500.0  # m
+DOWNDRAFT_FACTOR = 0.5  # Fraction of updraft strength
+DOWNDRAFT_RING_WIDTH = 250.0  # m
+GLIDER_SINK_RATE = 1.0  # m/s
+GLIDER_SPEED = 25.0  # m/s
+MIN_THERMAL_STRENGTH = 1.0  # m/s
+MAX_THERMAL_STRENGTH = 10.0  # m/s
+UPWIND_DRIFT_FACTOR = 0.5  # The glider will drift upwind during a climb by this amount
+GLIDER_PERFORMANCE_FACTOR = 1.0  # Efficiency of glider in turning
+MIN_SEARCH_ARC_ANGLE = 15  # deg
+MAX_SEARCH_ARC_ANGLE = 180  # deg
+
+
+# --- THERMAL PLACEMENT FUNCTIONS ---
+def generate_thermals_hexagonal(
+        area_size,
+        lambda_thermals,
+        lambda_strength,
+        num_thermals=None,
+        random_offset_std_dev=200
+):
+    """
+    Generates thermal locations in a hexagonal pattern with a random offset.
+
+    Args:
+        area_size (float): The side length of the square area in meters.
+        lambda_thermals (float): The mean number of thermals per square km for the Bernoulli trial.
+        lambda_strength (float): The lambda parameter for the Poisson distribution of thermal strength.
+        num_thermals (int, optional): An explicit number of thermals to generate. Defaults to None.
+        random_offset_std_dev (float, optional): Standard deviation of the random offset for each thermal. Defaults to 200.
+
+    Returns:
+        list: A list of thermal dictionaries.
+    """
+    thermals = []
+
+    # Calculate grid spacing based on thermal density
+    thermal_density_per_sq_m = lambda_thermals / 1_000_000.0
+    s = np.sqrt(2.0 / (np.sqrt(3.0) * thermal_density_per_sq_m))  # Side length of a hexagon
+
+    # Determine the number of grid points
+    cols = int(area_size / s) + 2
+    rows = int(area_size / (s * np.sqrt(3.0) / 2.0)) + 2
+
+    for i in range(rows):
+        for j in range(cols):
+            x = j * s + (i % 2) * s * 0.5
+            y = i * s * np.sqrt(3.0) / 2.0
+
+            # Apply a Bernoulli trial to determine if a thermal exists at this grid point
+            if np.random.rand() < (lambda_thermals * (s ** 2) / 1_000_000):
+                # Apply random offset
+                x += np.random.normal(0, random_offset_std_dev)
+                y += np.random.normal(0, random_offset_std_dev)
+
+                # Check if within the defined area
+                if -area_size / 2 < x < area_size / 2 and -area_size / 2 < y < area_size / 2:
+                    strength = poisson.rvs(lambda_strength)
+                    strength = max(MIN_THERMAL_STRENGTH, min(MAX_THERMAL_STRENGTH, strength))
+                    radius = strength * 100  # A simple model where radius scales with strength
+                    thermals.append({
+                        'x': x,
+                        'y': y,
+                        'strength': strength,
+                        'radius': radius
+                    })
+
+    return thermals
+
+
+# --- GLIDER FLIGHT FUNCTIONS ---
+def calculate_glider_sink_rate(glider_speed):
+    """
+    A placeholder function for a more complex glider polar curve.
+    For now, it returns a fixed sink rate.
+
+    Args:
+        glider_speed (float): The current airspeed of the glider in m/s.
+
+    Returns:
+        float: The sink rate in m/s.
+    """
+    return GLIDER_SINK_RATE
+
+
+def calculate_distance(p1, p2):
+    """
+    Calculates the Euclidean distance between two points.
+
+    Args:
+        p1 (tuple): A tuple containing the (x, y) coordinates of the first point.
+        p2 (tuple): A tuple containing the (x, y) coordinates of the second point.
+
+    Returns:
+        float: The distance between the two points.
+    """
+    return np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+
+
+def find_nearest_thermal_in_arc(glider_pos, thermals, search_arc_angle):
+    """
+    Finds the nearest thermal within the specified search arc.
+
+    Args:
+        glider_pos (tuple): (x, y) coordinates of the glider.
+        thermals (list): List of thermal dictionaries.
+        search_arc_angle (float): The total search arc angle in degrees.
+
+    Returns:
+        dict or None: The nearest thermal dictionary, or None if no thermals are found.
+    """
+    if not thermals:
+        return None
+
+    distances = []
+
+    # Simple search for now, assuming glider is always heading along a straight line towards the end point
+    # We will refine this later if needed.
+
+    for thermal in thermals:
+        dist = calculate_distance(glider_pos, (thermal['x'], thermal['y']))
+        distances.append(dist)
+
+    if not distances:
+        return None
+
+    nearest_thermal_index = np.argmin(distances)
+    return thermals[nearest_thermal_index]
+
 def simulate_intercept_experiment_dynamic(
         z_cbl_meters, lambda_thermals_per_sq_km, lambda_strength,
         mc_sniff_band1, mc_sniff_band2, end_point, search_arc_angle, plot_simulation=False, thermal_model='poisson'
@@ -353,6 +495,146 @@ def simulate_intercept_experiment_dynamic(
         'distance_to_land': math.hypot(end_point[0] - current_pos[0], end_point[1] - current_pos[1]),
         'total_distance_covered': total_distance_covered,
     }
+
+
+def print_detailed_single_flight_results(result, initial_bearing, params):
+    """
+    Prints the detailed results of a single flight simulation.
+
+    Args:
+        result (dict): The result dictionary from a single simulation run.
+        initial_bearing (float): The initial bearing of the glider.
+        params (dict): The parameters used for the simulation.
+    """
+    print("\n--- Simulation Results ---")
+    print(f"Initial Bearing: {initial_bearing:.2f} degrees")
+    print(f"Initial Parameters: {params}")
+    print(f"Total Flight Time: {result['total_time']:.2f} seconds")
+    print(f"Final Altitude: {result['final_altitude']:.2f} meters")
+    print(f"Thermal Intercepted: {'Yes' if result['thermal_found'] else 'No'}")
+    if result['thermal_found']:
+        print(f"Number of Path Segments: {len(result['path_points']) - 1}")
+
+
+def run_monte_carlo_with_user_input():
+    """
+    Runs a Monte Carlo simulation based on user-provided parameters.
+    """
+    try:
+        num_simulations = int(input("Enter number of simulations: "))
+        z_cbl = float(input("Enter cloud base height (m): "))
+        lambda_thermals = float(input("Enter thermal density (lambda per sq km): "))
+        lambda_strength = float(input("Enter thermal strength (lambda): "))
+        mc_band1 = float(input("Enter Macready setting for band 1 (m/s): "))
+        mc_band2 = float(input("Enter Macready setting for band 2 (m/s): "))
+        search_arc = float(input("Enter search arc angle (degrees): "))
+        thermal_model = input("Enter thermal model ('poisson' or 'hexagonal'): ")
+
+        # Validate inputs
+        if not (0 <= search_arc <= 360):
+            print("Search arc angle must be between 0 and 360 degrees.")
+            return
+
+        results = []
+        start_time = time.time()
+
+        for _ in range(num_simulations):
+            end_point_x = np.random.uniform(-50000, 50000)
+            end_point_y = np.random.uniform(-50000, 50000)
+            end_point = (end_point_x, end_point_y)
+
+            result = simulate_intercept_experiment_dynamic(
+                z_cbl_meters=z_cbl,
+                lambda_thermals_per_sq_km=lambda_thermals,
+                lambda_strength=lambda_strength,
+                mc_sniff_band1=mc_band1,
+                mc_sniff_band2=mc_band2,
+                end_point=end_point,
+                search_arc_angle=search_arc,
+                plot_simulation=False,
+                thermal_model=thermal_model
+            )
+            results.append(result)
+
+        end_time = time.time()
+        print(f"\n--- Monte Carlo Simulation Complete ---")
+        print(f"Time taken: {end_time - start_time:.2f} seconds")
+
+        # Process and print results
+        num_intercepts = sum(1 for r in results if r['thermal_found'])
+        thermal_intercept_rate = (num_intercepts / num_simulations) * 100
+        print(f"Number of Simulations: {num_simulations}")
+        print(f"Thermal Intercept Rate: {thermal_intercept_rate:.2f}%")
+
+        avg_time = np.mean([r['total_time'] for r in results if r['thermal_found']])
+        print(f"Average time to complete (for successful flights): {avg_time:.2f} seconds")
+
+    except ValueError:
+        print("Invalid input. Please enter valid numbers.")
+
+
+def run_nested_loop_simulation_and_save_to_csv(thermal_model_type):
+    """
+    Runs a nested loop simulation for different parameters and saves results to a CSV.
+
+    Args:
+        thermal_model_type (str): The thermal model to use ('poisson' or 'hexagonal').
+    """
+    print(f"\n--- Mode 3/4: Nested Loop Simulation ({thermal_model_type.capitalize()} Model) ---\n")
+
+    # Define parameter ranges for the nested loops
+    lambda_thermals_range = [0.01, 0.02]
+    lambda_strength_range = [1.0, 2.0]
+    mc_band1_range = [1.0, 2.0]
+    mc_band2_range = [0.5, 1.0]
+    search_arc_range = [30.0, 60.0]
+    num_simulations_per_run = 100
+
+    results_list = []
+
+    # Use a ThreadPoolExecutor for parallel processing
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = []
+        for lambda_thermals in lambda_thermals_range:
+            for lambda_strength in lambda_strength_range:
+                for mc_band1 in mc_band1_range:
+                    for mc_band2 in mc_band2_range:
+                        for search_arc in search_arc_range:
+
+                            # Create a list of futures to be executed
+                            for _ in range(num_simulations_per_run):
+                                end_point_x = np.random.uniform(-50000, 50000)
+                                end_point_y = np.random.uniform(-50000, 50000)
+                                end_point = (end_point_x, end_point_y)
+
+                                future = executor.submit(
+                                    simulate_intercept_experiment_dynamic,
+                                    z_cbl_meters=2500,
+                                    lambda_thermals_per_sq_km=lambda_thermals,
+                                    lambda_strength=lambda_strength,
+                                    mc_sniff_band1=mc_band1,
+                                    mc_sniff_band2=mc_band2,
+                                    end_point=end_point,
+                                    search_arc_angle=search_arc,
+                                    plot_simulation=False,
+                                    thermal_model=thermal_model_type
+                                )
+                                futures.append(future)
+
+        # Wait for all futures to complete and collect results
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                result = future.result()
+                results_list.append(result)
+            except Exception as e:
+                print(f"A simulation run generated an exception: {e}")
+
+    df = pd.DataFrame(results_list)
+    filename = f"simulation_results_{thermal_model_type}_{int(time.time())}.csv"
+    df.to_csv(filename, index=False)
+    print(f"\n--- Nested loop simulation complete. Results saved to {filename} ---")
+    print(f"Saved {len(df)} simulation results.")
+
 
 
 def plot_simulation_results(path_points, updraft_thermals_info, intercepted_thermals, end_point, title):
