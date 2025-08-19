@@ -743,6 +743,125 @@ def run_single_simulation():
     except ValueError:
         print("Invalid input. Please enter a valid number.")
 
+def write_results_to_csv(results, file_name):
+    """
+    Writes a list of dictionaries (simulation results) to a CSV file.
+    The keys of the dictionaries are used as the header.
+    """
+    print(f"Writing results to {file_name}...")
+    try:
+        with open(file_name, 'w', newline='') as csvfile:
+            if not results:
+                print("No results to write. File will be empty.")
+                return
+
+            fieldnames = results[0].keys()
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+            writer.writeheader()
+            for row in results:
+                writer.writerow(row)
+        print("Done.")
+    except Exception as e:
+        print(f"Error writing to CSV file: {e}")
+
+
+def run_nested_loop_simulation_and_save_to_csv(thermal_model):
+    """
+    Performs a nested loop simulation over a specific parameter set and saves the results to a CSV file.
+    """
+    # Define the fixed parameters as per the user's request
+    z_cbl = 2500
+    search_arc = 30
+
+    # Define the parameters to iterate over
+    lambda_thermals_values = [0.01] + list(np.arange(0.02, 0.11, 0.02))
+    lambda_strength_values = list(np.arange(1, 6, 1))
+    mc_band1_values = list(np.arange(1, 6, 1))
+    mc_band2_values = list(np.arange(1, 6, 1))
+
+    num_simulations_per_scenario = 1000
+    all_scenario_results = []
+
+    print("--- Starting Nested Loop Simulation ---")
+
+    for lambda_thermals in lambda_thermals_values:
+        for lambda_strength in lambda_strength_values:
+            for mc_band1 in mc_band1_values:
+                for mc_band2 in mc_band2_values:
+                    print(
+                        f"\nRunning scenario: Z_CBL={z_cbl}m, λ_thermals={lambda_thermals}, λ_strength={lambda_strength}, MC1={mc_band1}m/s, MC2={mc_band2}m/s, Arc={search_arc}deg")
+
+                    successful_flights = 0
+                    successful_metrics = []
+                    failed_distances = []
+
+                    tqdm_desc = f"Trials for this scenario ({num_simulations_per_scenario})"
+                    for _ in tqdm(range(num_simulations_per_scenario), desc=tqdm_desc):
+                        random_angle = random.uniform(0, 360)
+                        end_point_x = RANDOM_END_POINT_DISTANCE * math.cos(math.radians(random_angle))
+                        end_point_y = RANDOM_END_POINT_DISTANCE * math.sin(math.radians(random_angle))
+                        random_end_point = (end_point_x, end_point_y)
+
+                        result = simulate_intercept_experiment_dynamic(
+                            z_cbl_meters=z_cbl,
+                            lambda_thermals_per_sq_km=lambda_thermals,
+                            lambda_strength=lambda_strength,
+                            mc_sniff_band1=mc_band1,
+                            mc_sniff_band2=mc_band2,
+                            end_point=random_end_point,
+                            search_arc_angle=search_arc,
+                            plot_simulation = False,
+                            thermal_model = thermal_model
+                        )
+
+                        if result['success']:
+                            successful_flights += 1
+                            successful_metrics.append(result)
+                        else:
+                            failed_distances.append(result['distance_to_land'])
+
+                    probability = successful_flights / num_simulations_per_scenario
+
+                    avg_Ht = sum(m['total_height_climbed'] for m in successful_metrics) / len(
+                        successful_metrics) if successful_metrics else 0
+                    avg_Tc = sum(m['total_climbing_time'] for m in successful_metrics) / len(
+                        successful_metrics) if successful_metrics else 0
+                    avg_Tg = sum(m['total_gliding_time'] for m in successful_metrics) / len(
+                        successful_metrics) if successful_metrics else 0
+                    avg_T = avg_Tc + avg_Tg
+                    avg_Wc = avg_Ht / avg_Tc if avg_Tc > 0 else 0
+                    avg_Vmg_ms = RANDOM_END_POINT_DISTANCE / avg_T if avg_T > 0 else 0
+                    avg_Vmg_kmh = avg_Vmg_ms * MS_TO_KMH
+                    avg_failed_dist = sum(failed_distances) / len(failed_distances) if failed_distances else 0
+
+                    scenario_results = {
+                        'Z_CBL (m)': z_cbl,
+                        'Thermal Density (per km^2)': lambda_thermals,
+                        'Thermal Strength Lambda': lambda_strength,
+                        'MC_SNIFF_BAND1 (m/s)': mc_band1,
+                        'MC_SNIFF_BAND2 (m/s)': mc_band2,
+                        'Search Arc Angle (deg)': search_arc,
+                        'Successful Flights': successful_flights,
+                        'Probability': probability,
+                        'Avg Total Height Climbed (m)': avg_Ht,
+                        'Avg Total Climbing Time (s)': avg_Tc,
+                        'Avg Total Gliding Time (s)': avg_Tg,
+                        'Avg Total Time (s)': avg_T,
+                        'Avg Rate of Climb (m/s)': avg_Wc,
+                        'Avg Speed Made Good (km/h)': avg_Vmg_kmh,
+                        'Avg Failed Distance (m)': avg_failed_dist
+                    }
+                    all_scenario_results.append(scenario_results)
+
+    print("\n--- Simulation Complete. Generating CSV file. ---")
+
+    results_df = pd.DataFrame(all_scenario_results)
+    output_filename = "nested_loop_simulation_results.csv"
+    results_df.to_csv(output_filename, index=False)
+
+    print(f"Results successfully exported to '{output_filename}'")
+
 
 def run_default_monte_carlo_simulation():
     """
@@ -1126,33 +1245,29 @@ def main():
     print("Select a simulation option:")
     print("1. Single simulation with a visual plot and detailed printout")
     print("2. Monte Carlo simulation using a fixed set of default parameters")
-    print("3. A nested loop simulation for a specific set of parameters, saving results to a CSV")
-    print("4. Monte Carlo simulation with varying sniffing MC")
-    print("5. User-defined parameters (Hexagonal)")
-    print("6. Exit")
+    print("3. Nested loop simulation with Poisson thermals, saving results to a CSV")
+    print("4. Nested loop simulation with Hexagonal thermals, saving results to a CSV")
+    print("5. Exit")
 
     while True:
         try:
-            choice = input("\nEnter your choice (1-6): ")
+            choice = input("\nEnter your choice (1-5): ")
             if choice == '1':
                 run_single_simulation()
             elif choice == '2':
                 run_default_monte_carlo_simulation()
             elif choice == '3':
-                run_nested_loop_simulation()
+                run_nested_loop_simulation_and_save_to_csv(thermal_model='poisson')
             elif choice == '4':
-                run_mc_sniff_varied_simulation()
+                run_nested_loop_simulation_and_save_to_csv(thermal_model='hexagonal')
             elif choice == '5':
-                run_hexagonal_simulation_with_user_params()
-            elif choice == '6':
                 print("Exiting.")
                 sys.exit(0)
             else:
-                print("Invalid choice. Please enter a number from 1 to 6.")
+                print("Invalid choice. Please enter a number from 1 to 5.")
         except KeyboardInterrupt:
             print("\nExiting.")
             sys.exit(0)
-
 
 if __name__ == "__main__":
     main()
