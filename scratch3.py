@@ -355,10 +355,54 @@ def simulate_intercept_experiment_dynamic(
     total_gliding_time = 0.0
     total_distance_covered = 0.0
     path_details = []
+    last_action = "Start"
 
+    # Get thermal information
     remaining_thermals = list(updraft_thermals_info)
+    current_band, current_mc_sniff_ms, altitude_to_next_band, next_band_alt = get_band_info(current_altitude,
+                                                                                            z_cbl_meters,
+                                                                                            mc_sniff_band1,
+                                                                                            mc_sniff_band2)
+
+
+
+    # Get initial band info and glider parameters
+
+    airspeed_ms, sink_rate_ms, glide_ratio, airspeed_knots, sink_rate_knots = get_glider_parameters(
+        current_mc_sniff_ms)
+
+    # Find the nearest thermal from the starting point to log the initial updraft value
+    nearest_thermal_from_start = None
+    min_dist_to_thermal_from_start = float('inf')
+    for thermal in remaining_thermals:
+        dist_to_thermal = math.hypot(thermal['center'][0], thermal['center'][1])
+        if dist_to_thermal < min_dist_to_thermal_from_start:
+            min_dist_to_thermal_from_start = dist_to_thermal
+            nearest_thermal_from_start = thermal
+
+    initial_updraft = nearest_thermal_from_start['updraft_strength'] if nearest_thermal_from_start else "N/A"
+    initial_delta = calculate_bearing_delta(current_pos, end_point, end_point)
+
+    # Log the initial state
+    path_details.append({
+        'dist': 0.000,
+        'alt': current_altitude,
+        'delta': initial_delta,
+        'band': current_band,
+        'mc_set': current_mc_sniff_ms,
+        'updraft': initial_updraft,
+        'speed_knots': airspeed_knots,
+        'sink_rate_ms': sink_rate_ms,
+        'action': "Start"
+    })
 
     while math.hypot(end_point[0] - current_pos[0], end_point[1] - current_pos[1]) > EPSILON:
+        # NEW: Place the get_band_info call here so variables are defined
+        current_band, current_mc_sniff_ms, altitude_to_next_band, next_band_alt = get_band_info(current_altitude,
+                                                                                                z_cbl_meters,
+                                                                                                mc_sniff_band1,
+                                                                                                mc_sniff_band2)
+
         if current_altitude <= MIN_SAFE_ALTITUDE:
             if plot_simulation:
                 ax.plot([p[0] for p in path_points], [p[1] for p in path_points], 'r-')
@@ -368,13 +412,6 @@ def simulate_intercept_experiment_dynamic(
 
         path_start = current_pos
         distance_to_end = math.hypot(end_point[0] - path_start[0], end_point[1] - path_start[1])
-
-        current_band, current_mc_sniff_ms, altitude_to_next_band, next_band_alt = get_band_info(current_altitude,
-                                                                                                z_cbl_meters,
-                                                                                                mc_sniff_band1,
-                                                                                                mc_sniff_band2)
-        airspeed_ms, sink_rate_ms, glide_ratio, airspeed_knots, sink_rate_knots = get_glider_parameters(
-            current_mc_sniff_ms)
 
         direct_glide_dist = (current_altitude - MIN_SAFE_ALTITUDE) * glide_ratio
 
@@ -472,14 +509,67 @@ def simulate_intercept_experiment_dynamic(
             next_pos = (path_start[0] + travel_distance * math.cos(bearing_to_end_radians),
                         path_start[1] + travel_distance * math.sin(math.radians(bearing_to_end_degrees)))
 
+        # AFTER
         # MODIFIED: Log the glide action at the start of the segment
         glide_time = travel_distance / airspeed_ms
         altitude_after_glide = current_altitude - glide_time * sink_rate_ms
         delta_after_glide = calculate_bearing_delta(path_start, next_pos, end_point)
 
+        # --- NEW: Check if a thermal was intercepted and log its details first ---
+        # If the glider just climbed, we log the new glide segment from the top of the CBL.
+        if current_altitude >= z_cbl_meters and last_action == "Climb":
+            path_details.append({
+                'dist': total_distance_covered,
+                'alt': current_altitude,
+                'delta': calculate_bearing_delta(current_pos, end_point, end_point),
+                'band': current_band,
+                'mc_set': current_mc_sniff_ms,
+                'updraft': "N/A",
+                'speed_knots': airspeed_knots,
+                'sink_rate_ms': sink_rate_ms,
+                'action': "Glide"
+            })
+            last_action = "Glide"
 
-        # --- FIX STARTS HERE ---
-        # Update altitude, position, and totals *before* logging the details.
+        # This block handles all thermal interceptions.
+        if is_thermal_intercept:
+            updraft_val = nearest_thermal_in_arc['updraft_strength']
+            if updraft_val >= current_mc_sniff_ms:
+                # Glider chooses to climb
+                height_climbed = z_cbl_meters - current_altitude
+                climbing_time = height_climbed / updraft_val
+                total_height_climbed += height_climbed
+                total_climbing_time += climbing_time
+                current_altitude = z_cbl_meters
+                current_pos = next_pos  # Glider's horizontal position doesn't change during climb
+
+                path_details.append({
+                    'dist': total_distance_covered,
+                    'alt': current_altitude,
+                    'delta': calculate_bearing_delta(next_pos, end_point, end_point),
+                    'band': current_band,
+                    'mc_set': current_mc_sniff_ms,
+                    'updraft': updraft_val,
+                    'speed_knots': "N/A",
+                    'sink_rate_ms': -updraft_val,
+                    'action': "Climb"
+                })
+                last_action = "Climb"
+            else:
+                # Glider rejects the thermal and continues to glide, but we log the interception
+                path_details.append({
+                    'dist': total_distance_covered + travel_distance,
+                    'alt': current_altitude - (travel_distance / airspeed_ms * sink_rate_ms),
+                    'delta': calculate_bearing_delta(current_pos, next_pos, end_point),
+                    'band': current_band,
+                    'mc_set': current_mc_sniff_ms,
+                    'updraft': updraft_val,
+                    'speed_knots': airspeed_knots,
+                    'sink_rate_ms': sink_rate_ms,
+                    'action': "Glide"
+                })
+            if nearest_thermal_in_arc in remaining_thermals:
+                remaining_thermals.remove(nearest_thermal_in_arc)
         # Update state after glide
         current_altitude = altitude_after_glide
         current_pos = next_pos
@@ -487,21 +577,8 @@ def simulate_intercept_experiment_dynamic(
         total_gliding_time += glide_time
         total_distance_covered += travel_distance
 
-        path_details.append({
-            'dist': total_distance_covered,
-            'alt': current_altitude,
-            'delta': delta_after_glide,
-            'band': current_band,
-            'mc_set': current_mc_sniff_ms,
-            'updraft': "N/A",
-            'speed_knots': airspeed_knots,
-            'sink_rate_ms': sink_rate_ms,
-            'action': "Glide"
-        })
-
-
         if is_thermal_intercept:
-            remaining_thermals.remove(nearest_thermal_in_arc)
+
             updraft_val = nearest_thermal_in_arc['updraft_strength']
             if updraft_val >= current_mc_sniff_ms:
                 # MODIFIED: Log the climb action after the glide
