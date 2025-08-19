@@ -1,0 +1,29 @@
+This script, MC_sim_hex_poiss.py, is a comprehensive Monte Carlo simulation tool for a glider's thermal interception. It models the flight of a glider over a 2D plane with thermals, which are arranged in a semi-random hexagonal pattern. The script offers several modes of operation, allowing a user to run a single simulation, a full Monte Carlo simulation, or a nested loop simulation to analyze different parameters.
+
+
+Overall Script Purpose
+
+The main purpose of the script is to simulate the behavior of a glider pilot trying to navigate a course by finding and climbing thermals. It helps analyze the effectiveness of different flight strategies (specifically, the "Macready" and "search arc" settings) and environmental conditions (thermal density and strength) on the glider's flight time and success. The simulation ends either when the glider reaches its destination or when its altitude drops below a minimum threshold.
+
+
+Detailed Function Descriptions
+
+	•	simulate_intercept_experiment_dynamic(): This is the core function of the script, likely located in a separate file (e.g., func1.py). It runs a single flight simulation. It takes in various parameters such as cloud base height, thermal density, thermal strength, Macready settings, and the search arc angle. The function iteratively calculates the glider's position and altitude as it glides towards its destination or a detected thermal. If a thermal is found and its strength is greater than the current Macready setting, the glider "climbs" it, gaining altitude. The function records key flight metrics like flight time, distance covered, and height climbed.
+	•	print_detailed_single_flight_results(): This helper function formats and prints a detailed summary of the results from a single simulation run. It displays the simulation's input parameters and a summary of the flight's outcome, including final altitude, total flight time, and the number of thermals intercepted. This is useful for debugging or for a quick analysis of a single scenario.
+	•	run_single_simulation(): This function prompts the user for specific parameters to configure a single simulation. It then calls simulate_intercept_experiment_dynamic() with these parameters and uses print_detailed_single_flight_results() to show the output. This mode is ideal for visualizing a single flight path and understanding the simulation's mechanics.
+	•	run_monte_carlo_with_user_input(): This function is designed to run a Monte Carlo simulation. Instead of a single run, it executes the simulation many times (e.g., 1000 times) with the same set of parameters but different random thermal distributions and glider paths. This provides a statistical average of the flight outcomes, giving a more reliable picture of the flight strategy's effectiveness under a variety of conditions.
+	•	run_nested_loop_simulation_and_save_to_csv(): This function automates a large-scale analysis. It runs the simulation over a grid of parameters, such as varying the search arc or thermal density. It systematically tests every combination of these parameters and saves the results to a CSV file. This is crucial for data analysis and generating the data needed for scientific plots and reports.
+	•	main(): This is the entry point of the script. It presents a simple text-based menu to the user, allowing them to choose which mode of operation they want to run. Based on the user's choice, it calls one of the other functions (run_single_simulation(), run_monte_carlo_with_user_input(), etc.) to execute the desired simulation.
+
+
+Key Concepts
+
+	•	Monte Carlo Simulation: A method that relies on repeated random sampling to obtain numerical results. In this case, it's used to model the probabilistic nature of finding thermals and to get a statistically significant understanding of the glider's performance.
+	•	Hexagonal Thermal Placement: Instead of completely random thermal placement, this model arranges potential thermal locations in a hexagonal grid, which is then perturbed with a random offset. This can be a more realistic representation of how thermals might form in certain atmospheric conditions.
+	•	Macready Setting: A soaring term for the average climb rate a pilot expects to achieve in the next thermal. By setting a "Macready sniff" value, the glider only decides to climb a thermal if its strength meets or exceeds this expectation, optimizing the flight for speed.
+
+
+The hexagonal thermal placement is perturbed in two main ways to introduce realistic randomness: a random offset and a Bernoulli trial.
+First, the script creates a precise, evenly-spaced hexagonal grid of points, which represent the potential locations for thermals. This is the structured, non-random component.
+Next, to perturb this perfect pattern, the script adds a small, random (x,y) displacement to the coordinates of each grid point. This means that instead of a thermal being at exactly (1000, 1500), its center might be slightly shifted to a new, unique position like (1023, 1515). This process breaks the rigid symmetry and makes the thermal distribution appear more organic, like it would in a real-world scenario.
+Finally, the script performs a Bernoulli trial at each of these perturbed locations. This is a probabilistic test, like flipping a weighted coin. The script checks a randomly generated number against a predefined probability (e.g., 50%). If the number passes the test, a thermal is "created" at that specific perturbed location. If it fails, no thermal is placed there. This second step simulates the fact that not every spot where a thermal could form will actually have one.
